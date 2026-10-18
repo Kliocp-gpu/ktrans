@@ -20,6 +20,10 @@ And it decodes NetEase Cloud Music's `.ncm` private format along the way.
 
 </div>
 
+## 📸 Screenshot
+
+![GUI (dark mode)](screenshots/gui-dark.png)
+
 ## ✨ Why KTrans
 
 | | |

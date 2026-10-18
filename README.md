@@ -20,6 +20,10 @@
 
 </div>
 
+## 📸 截图
+
+![GUI 界面（深色模式）](screenshots/gui-dark.png)
+
 ## ✨ 为什么是 KTrans
 
 | | |
