@@ -54,6 +54,21 @@ python3 mp3_to_mp4.py music.mp3
 python3 mp3_to_mp4.py *.ncm *.flac --audio-codec auto
 ```
 
+### 4. (Optional) Build a macOS app bundle
+
+```bash
+./build_app.sh
+```
+
+This produces `dist/ktrans.app` — double-click to run, or drag it into Applications.
+
+> The script auto-detects a Python interpreter with a working tkinter, and bakes the `tkinterdnd2` (drag & drop) path into the launcher.
+
+⚠️ This is a **local-use-only** bundle (shell + launcher script) that hardcodes your machine's Python paths — run `build_app.sh` again on any other machine. For a distributable build, wait for the py2app version (see Roadmap).
+
+- Troubleshooting: check `/tmp/ktrans.log` if double-click does nothing
+- Known limitation: v1 does not support "drop a file onto the Dock icon" (script-based `.app` bundles don't receive the system's odoc event) — drop files into the window instead
+
 ## 🖱️ Usage
 
 ### GUI
@@ -96,7 +111,8 @@ Output is always **`.mp4`** (H.264 black video + audio track), same name as the 
 
 ## 🗺️ Roadmap
 
-- [ ] Standalone py2app bundle (no Python environment needed)
+- [ ] Standalone py2app bundle (no Python environment needed, distributable)
+- [ ] Drop files onto the Dock icon (depends on the item above)
 - [ ] Custom app icon
 - [ ] Windows support
 

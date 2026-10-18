@@ -55,6 +55,21 @@ python3 mp3_to_mp4.py 音乐.mp3
 python3 mp3_to_mp4.py *.ncm *.flac --audio-codec auto
 ```
 
+### 4.（可选）打包成 macOS App
+
+```bash
+./build_app.sh
+```
+
+产出 `dist/ktrans.app`，双击即可运行，也可拖进「应用程序」文件夹。
+
+> 脚本会自动探测你机器上带可用 tkinter 的 Python 解释器，并把拖拽库 `tkinterdnd2` 的路径写进启动器。
+
+⚠️ 这是「外壳 + 启动脚本」结构的**本机自用版**，启动器里记录的是你本机的 Python 路径，换台机器要重新跑一次 `build_app.sh`。想发给别人直接用，请等 py2app 全量打包版本（见 Roadmap）。
+
+- 排障：双击没反应时看日志 `/tmp/ktrans.log`
+- 已知限制：v1 不支持"把文件拖到 Dock 图标上打开"（脚本型 `.app` 收不到系统的 odoc 事件），请在窗口内拖放
+
 ## 🖱️ 使用
 
 ### GUI
@@ -97,7 +112,8 @@ python3 mp3_to_mp4.py <文件...> [-o 输出目录] [--audio-codec auto|copy|aac
 
 ## 🗺️ Roadmap
 
-- [ ] py2app 独立打包（免 Python 环境）
+- [ ] py2app 独立打包（免 Python 环境，可直接分发给别人）
+- [ ] 拖文件到 Dock 图标即可打开（依赖上面那项）
 - [ ] 自定义 App 图标
 - [ ] Windows 版
 
