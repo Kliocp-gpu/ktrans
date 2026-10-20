@@ -95,6 +95,7 @@ python3 mp3_to_mp4.py <files...> [-o output_dir] [--audio-codec auto|copy|aac] [
 | Input | Notes |
 |---|---|
 | `.ncm` | NetEase private format, built-in decryption (output is whatever is inside, usually FLAC/MP3) |
+| `.qmc*` `.mflac*` `.mgg*` `.tkm` `.bkc*` | QQ Music / Moo Music private formats, built-in decryption (algorithm ported from unlock-music, verified byte-for-byte) ⚠️ MusicEx-footer files not supported yet (key lives in the client database) |
 | `.mp3` / `.aac` / `.m4a` / `.mp4` (audio-only) | Remuxed as-is, zero transcoding |
 | `.flac` / `.wav` / `.ogg` / `.opus` / `.ape` / `.wma` / `.aiff` etc. | Anything ffmpeg understands; auto mode transcodes to AAC |
 
@@ -110,8 +111,9 @@ Output is always **`.mp4`** (H.264 black video + audio track), same name as the 
 
 ## ⚠️ Disclaimer
 
-- The `.ncm` decryption is intended **only for converting audio files you legally own** to local formats. Do not use it to circumvent copyright protection or distribute copyrighted works. Support the artists 🎵
-- This project is not affiliated with NetEase Cloud Music.
+- The private-format decryption (`.ncm` / `.qmc*` / `.mflac*` / `.mgg*` etc.) is intended **only for converting audio files you legally own** to local formats. Do not use it to circumvent copyright protection or distribute copyrighted works. Support the artists 🎵
+- The QMC decryption algorithm is ported from [unlock-music](https://git.unlock-music.dev/um/cli) (MIT License) — thanks to the original authors.
+- This project is not affiliated with NetEase Cloud Music or Tencent Music.
 
 ## 🗺️ Roadmap
 

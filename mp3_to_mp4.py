@@ -20,6 +20,15 @@ import shutil
 import subprocess
 import sys
 
+# QQ 音乐 / Moo 音乐私有加密格式（同体系，统一走 qmc_decoder）
+QMC_EXTS = (
+    ".qmc0", ".qmc2", ".qmc3", ".qmc4", ".qmc6", ".qmc8",
+    ".qmcflac", ".qmcogg", ".tkm",
+    ".mflac", ".mflac0", ".mflac1", ".mflaca", ".mflach", ".mflacl", ".mflacm",
+    ".mgg", ".mgg0", ".mgg1", ".mgga", ".mggh", ".mggl", ".mggm",
+    ".bkcmp3", ".bkcm4a", ".bkcflac", ".bkcwav", ".bkcape", ".bkcogg", ".bkcwma",
+)
+
 
 def find_ffmpeg(explicit: str | None) -> str:
     """返回可用的 ffmpeg 路径；找不到则抛 RuntimeError（不在此退出，交给调用方处理）。"""
@@ -185,7 +194,8 @@ def convert_one(
     # NCM(网易云私有格式)需先解码成临时音频文件，再交给 ffmpeg
     tmp = None
     src = audio_path
-    if audio_path.lower().endswith(".ncm"):
+    ext = os.path.splitext(audio_path)[1].lower()
+    if ext == ".ncm":
         try:
             from ncm_decoder import decode_ncm
         except Exception as e:
@@ -197,6 +207,20 @@ def convert_one(
             log(f"[NCM] 已解密: {audio_path}  ->  {src}")
         except Exception as e:
             log(f"[失败] NCM 解密出错 {audio_path}: {e}")
+            return False
+    elif ext in QMC_EXTS:
+        # QMC/MFLAC/MGG（QQ音乐私有格式，Moo 音乐的 bkc* 同体系）
+        try:
+            from qmc_decoder import decode_qmc
+        except Exception as e:
+            log(f"[跳过] QMC 解码不可用（缺 qmc_decoder）: {e}")
+            return False
+        try:
+            src = decode_qmc(audio_path)
+            tmp = src
+            log(f"[QMC] 已解密: {audio_path}  ->  {src}")
+        except Exception as e:
+            log(f"[失败] QMC 解密出错 {audio_path}: {e}")
             return False
 
     try:

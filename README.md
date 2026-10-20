@@ -96,6 +96,7 @@ python3 mp3_to_mp4.py <文件...> [-o 输出目录] [--audio-codec auto|copy|aac
 | 输入 | 说明 |
 |---|---|
 | `.ncm` | 网易云私有格式，内置解密（解出什么就是什么，通常是 FLAC/MP3） |
+| `.qmc*` `.mflac*` `.mgg*` `.tkm` `.bkc*` | QQ 音乐 / Moo 音乐私有格式，内置解密（算法移植自 unlock-music，已逐字节对齐验证）⚠️ MusicEx 尾标的文件暂不支持（密钥在客户端数据库） |
 | `.mp3` / `.aac` / `.m4a` / `.mp4`（纯音频） | 原样封装，零转码 |
 | `.flac` / `.wav` / `.ogg` / `.opus` / `.ape` / `.wma` / `.aiff` 等 | 只要 ffmpeg 认识就行，auto 模式下自动转 AAC |
 
@@ -111,8 +112,9 @@ python3 mp3_to_mp4.py <文件...> [-o 输出目录] [--audio-codec auto|copy|aac
 
 ## ⚠️ 声明
 
-- `.ncm` 解密功能仅用于**转换你自己合法获取的音频文件**的本地格式，请勿用于绕过版权保护传播作品。支持下正版 🎵
-- 本项目与网易云音乐官方无关。
+- 私有格式解密功能（`.ncm` / `.qmc*` / `.mflac*` / `.mgg*` 等）仅用于**转换你自己合法获取的音频文件**的本地格式，请勿用于绕过版权保护传播作品。支持下正版 🎵
+- QMC 解密算法移植自 [unlock-music](https://git.unlock-music.dev/um/cli)（MIT License），感谢原作者。
+- 本项目与网易云音乐、腾讯音乐官方无关。
 
 ## 🗺️ Roadmap
 

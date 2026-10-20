@@ -29,6 +29,12 @@ AUDIO_EXTS = (
     ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus",
     ".ape", ".mka", ".wma", ".aif", ".aiff", ".mp2", ".wv", ".tta",
     ".ac3", ".ncm",
+    # QQ 音乐 / Moo 音乐私有格式
+    ".qmc0", ".qmc2", ".qmc3", ".qmc4", ".qmc6", ".qmc8",
+    ".qmcflac", ".qmcogg", ".tkm",
+    ".mflac", ".mflac0", ".mflac1", ".mflaca", ".mflach", ".mflacl", ".mflacm",
+    ".mgg", ".mgg0", ".mgg1", ".mgga", ".mggh", ".mggl", ".mggm",
+    ".bkcmp3", ".bkcm4a", ".bkcflac", ".bkcwav", ".bkcape", ".bkcogg", ".bkcwma",
 )
 
 # 苹果系统配色（浅色 / 深色两套）
@@ -284,7 +290,7 @@ class App:
         dz = "把音频拖到这里" if self.dnd_enabled else "添加音频开始"
         tk.Label(inner, text=dz, bg=self.pal["card"], fg=self.pal["text"],
                  font=self.f_drop).pack()
-        tk.Label(inner, text="支持 mp3 / wav / flac / m4a / ncm 等",
+        tk.Label(inner, text="支持 mp3 / wav / flac / ncm / qmc / mflac 等",
                  bg=self.pal["card"], fg=self.pal["gray"],
                  font=self.f_sub).pack(pady=(6, 0))
 
