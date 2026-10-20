@@ -25,6 +25,10 @@ from tkinter import filedialog, messagebox, ttk
 
 from mp3_to_mp4 import convert_one, default_output, find_ffmpeg, unique_output
 
+APP_NAME = "ktrans"
+APP_SUBTITLE = "音乐格式转换器"
+VERSION = "2.02"
+
 AUDIO_EXTS = (
     ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus",
     ".ape", ".mka", ".wma", ".aif", ".aiff", ".mp2", ".wv", ".tta",
@@ -169,7 +173,7 @@ class App:
         self.dnd_enabled = dnd_enabled
         self.pal = DARK if _is_dark() else LIGHT
 
-        self.root.title("黑屏视频转换器")
+        self.root.title(f"{APP_NAME} - {APP_SUBTITLE}")
         self.root.geometry("840x620")
         self.root.minsize(780, 540)
         self.root.configure(background=self.pal["bg"])
@@ -217,9 +221,9 @@ class App:
         side.pack(side="left", fill="y")
         side.pack_propagate(False)
 
-        tk.Label(side, text="黑屏视频", bg=self.pal["sidebar"], fg=self.pal["text"],
+        tk.Label(side, text=APP_NAME, bg=self.pal["sidebar"], fg=self.pal["text"],
                  font=self.f_title).pack(anchor="w", padx=18, pady=(20, 0))
-        tk.Label(side, text="转换器", bg=self.pal["sidebar"], fg=self.pal["gray"],
+        tk.Label(side, text=APP_SUBTITLE, bg=self.pal["sidebar"], fg=self.pal["gray"],
                  font=self.f_sub).pack(anchor="w", padx=18, pady=(0, 18))
 
         for key, text in (
@@ -425,20 +429,22 @@ class App:
         p = self._page("about")
         box = tk.Frame(p, bg=self.pal["bg"])
         box.pack(fill="both", expand=True, padx=24, pady=24)
-        tk.Label(box, text="黑屏视频转换器", bg=self.pal["bg"], fg=self.pal["text"],
+        tk.Label(box, text=APP_NAME, bg=self.pal["bg"], fg=self.pal["text"],
                  font=self.f_title).pack(anchor="w")
+        tk.Label(box, text=f"{APP_SUBTITLE} · 版本 {VERSION}", bg=self.pal["bg"],
+                 fg=self.pal["gray"], font=self.f_nav).pack(anchor="w", pady=(2, 8))
         try:
             ffmpeg = find_ffmpeg(None)
         except RuntimeError as e:
             ffmpeg = str(e)
         for line in (
-            "把音频封装成画面纯黑的 MP4，音频原样保留。",
+            "把音频转成可上传视频平台的 MP4，支持私有加密格式直转。",
             "",
             f"ffmpeg：{ffmpeg}",
-            f"支持格式：{len(AUDIO_EXTS)} 种（含网易云 .ncm）",
+            f"支持格式：{len(AUDIO_EXTS)} 种（含网易云 .ncm、QQ 音乐 .qmc*/.mflac*/.mgg*）",
             "拖拽支持：tkinterdnd2" if self.dnd_enabled else "拖拽支持：未安装 tkinterdnd2",
             "",
-            "转换核心与 NCM 解码均为纯标准库实现，文件全部在本机处理。",
+            "转换核心与解密模块均为纯标准库实现，文件全部在本机处理。",
         ):
             tk.Label(box, text=line, bg=self.pal["bg"],
                      fg=self.pal["gray"] if line else self.pal["bg"],
