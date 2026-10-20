@@ -29,8 +29,11 @@ And it decodes NetEase Cloud Music's `.ncm` private format along the way.
 | | |
 |:---:|:---|
 | 🖤 **Truly black** | Not "looks black" — pixel value **Y=0 pure black**. Uses the `color_range` full-range flag to fix ffmpeg's default black source being Y=16 (visually black, but not actually black). |
-| 🎁 **NCM support** | Built-in NetEase `.ncm` decryptor (pure Python, zero third-party dependencies). Drop an NCM file in, get an MP4 out. |
+| 🖼️ **Cover mode** | Pulls the embedded album art: blurred & scaled backdrop + centered cover + title/artist text, with automatic font shrinking and ellipsis for long titles. Files without cover art fall back to "black + centered title". |
+| 🎁 **NCM support** | Built-in NetEase `.ncm` decryptor (pure Python, zero third-party dependencies) — metadata and embedded cover art come out too. |
+| 🎵 **All QQ Music formats** | `.qmc0/2/3/4/6/8`, `.qmcflac`, `.qmcogg`, `.mflac*`, `.mgg*`, `.tkm`, `.bkc*` — static table, map table and RC4 variant ciphers all reversed. |
 | 🎧 **Smart audio muxing** | Auto-detects the source codec: MP3 / AAC are remuxed losslessly, everything else (FLAC etc.) is transcoded to AAC — fixing Douyin's "extract audio failed" error. |
+| 🔄 **Not just MP4** | Audio-only output too: MP3 / M4A / FLAC / WAV — matching codecs are copied losslessly, embedded covers carried over. |
 | 🪶 **Lightweight** | The conversion core has zero third-party dependencies — only system ffmpeg is required. |
 
 ## 📦 Install
@@ -80,6 +83,8 @@ This produces `dist/ktrans.app` — double-click to run, or drag it into Applica
 Drag files (or a whole folder) into the window — when the list is empty, the list area itself is the drop zone.
 The sidebar shows conversion history, logs and about.
 
+With `mp4` output there's an extra "Picture" row: **black** (smallest file, friendliest to platform re-encoding) or **cover** (album art + blurred backdrop + title/artist).
+
 ### Command line
 
 ```bash
@@ -88,7 +93,17 @@ python3 mp3_to_mp4.py <files...> [-o output_dir] [--audio-codec auto|copy|aac] [
   --audio-codec auto   Default. MP3/AAC remuxed losslessly, others transcoded to AAC (recommended)
   --audio-codec copy   Always remux without transcoding (FLAC-in-MP4 may fail audio extraction on some platforms)
   --audio-codec aac    Always transcode to AAC 192k
+  --video black|cover  Picture: black = pure black (default, smallest) / cover = album art
+  --format mp4|mp3|m4a|flac|wav   Output format (default mp4)
   --overwrite          Overwrite existing outputs (default: auto-suffix " 2" to dedupe)
+```
+
+Cover mode example:
+
+```bash
+python3 mp3_to_mp4.py nocturne.mp3 --video cover -r 1920x1080
+# [封面] 夜曲 Nocturne — 周杰伦 Jay Chou
+# [完成] nocturne.mp4  (213.3 KB)
 ```
 
 ## 🎼 Supported formats
@@ -100,13 +115,19 @@ python3 mp3_to_mp4.py <files...> [-o output_dir] [--audio-codec auto|copy|aac] [
 | `.mp3` / `.aac` / `.m4a` / `.mp4` (audio-only) | Remuxed as-is, zero transcoding |
 | `.flac` / `.wav` / `.ogg` / `.opus` / `.ape` / `.wma` / `.aiff` etc. | Anything ffmpeg understands; auto mode transcodes to AAC |
 
-Output is always **`.mp4`** (H.264 black video + audio track), same name as the source, with auto-deduped suffixes on name collisions.
+Output defaults to **`.mp4`** (H.264 video + audio track), same name as the source, with auto-deduped suffixes on name collisions.
+Audio-only outputs (`--format mp3/m4a/flac/wav`) are supported as well.
 
 ## ⚙️ How it works
 
-1. **NCM decryption** (`ncm_decoder.py`): magic check → AES-128-ECB to recover the RC4 key → NCM-variant RC4 keystream XOR to restore audio bytes.
-2. **Probe**: ffprobe reads the duration and audio codec.
-3. **Mux**: `color=c=black` generates the black source; `-color_range 2` marks it full-range so decoders see Y=0 true black; the video track's duration is pinned explicitly to stay aligned with audio.
+1. **NCM decryption** (`ncm_decoder.py`): magic check → AES-128-ECB to recover the RC4 key → NCM-variant RC4 keystream XOR to restore audio bytes. The metadata block and embedded cover are parsed along the way.
+2. **QMC decryption** (`qmc_decoder.py`): footer key → TencentTEA derivation → pick static table / map table / RC4 variant by key length.
+3. **Probe**: a single ffprobe call yields duration, audio codec, the `attached_pic` cover stream and ID3 tags (title/artist).
+4. **Mux**: `color=c=black` generates the black source; `-color_range 2` marks it full-range so decoders see Y=0 true black; the video track's duration is pinned explicitly to stay aligned with audio.
+
+> 💡 When using `-shortest`, the 1fps black video encodes so fast that it overshoots past the audio's end, producing extra frames — so the color filter gets an explicit `d=<duration>` instead.
+
+5. **Cover mode**: the embedded cover is extracted to an image → `split` into two branches: one scaled up + cropped + gaussian-blurred + darkened as the backdrop, the other scaled to 56% of the frame height and centered on top → `drawtext` writes title/artist (text goes through `textfile=`, side-stepping filter escaping entirely). The frame is a `-loop 1` still image, cut to the audio duration with `-t`.
 
 > 💡 When using `-shortest`, the 1fps black video encodes so fast that it overshoots past the audio's end, producing extra frames — so the color filter gets an explicit `d=<duration>` instead.
 

@@ -15,10 +15,13 @@ mp3_to_mp4.py — 把音频（默认 mp3）封装成 mp4，视频轨为纯黑屏
 """
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
+import unicodedata
 
 # QQ 音乐 / Moo 音乐私有加密格式（同体系，统一走 qmc_decoder）
 QMC_EXTS = (
@@ -29,8 +32,35 @@ QMC_EXTS = (
     ".bkcmp3", ".bkcm4a", ".bkcflac", ".bkcwav", ".bkcape", ".bkcogg", ".bkcwma",
 )
 
-# 输出格式：mp4 = 黑屏视频（上传平台）；其余 = 纯音频输出（解锁/转码）
+# 输出格式：mp4 = 视频（上传平台）；其余 = 纯音频输出（解锁/转码）
 OUTPUT_FORMATS = ("mp4", "mp3", "m4a", "flac", "wav")
+
+# mp4 的画面模式：black = 纯黑屏；cover = 专辑封面 + 模糊背景 + 歌名文字
+VIDEO_MODES = ("black", "cover")
+
+# drawtext 需要字体文件；优先挑带中文字形的（macOS / Windows / Linux 常见位置）
+FONT_CANDIDATES = (
+    "/System/Library/Fonts/PingFang.ttc",
+    "/System/Library/Fonts/Hiragino Sans GB.ttc",
+    "/System/Library/Fonts/STHeiti Medium.ttc",
+    "/System/Library/Fonts/Supplemental/Songti.ttc",
+    "/Library/Fonts/Arial Unicode.ttf",
+    "C:/Windows/Fonts/msyh.ttc",
+    "C:/Windows/Fonts/msyhbd.ttc",
+    "C:/Windows/Fonts/simhei.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+)
+
+
+def find_font(explicit: str | None = None) -> str | None:
+    """返回一个可用的字体文件路径（供 drawtext 用）；找不到返回 None（则不加文字）。"""
+    if explicit:
+        return explicit if os.path.isfile(explicit) else None
+    for p in FONT_CANDIDATES:
+        if p and os.path.isfile(p):
+            return p
+    return None
 
 
 def find_ffmpeg(explicit: str | None) -> str:
@@ -137,6 +167,234 @@ def _probe_codec(ffmpeg: str, media: str) -> str | None:
         return None
 
 
+def probe_media(ffmpeg: str, media: str) -> dict:
+    """一次 ffprobe 拿到封面流索引、标签（歌名/歌手）和时长。
+
+    返回 {'duration','audio_codec','cover_index','cover_codec','title','artist','album'}，
+    取不到的字段为 None / 空串。封面靠 disposition.attached_pic == 1 识别。
+    """
+    info = {
+        "duration": None, "audio_duration": None, "audio_codec": None,
+        "cover_index": None, "cover_codec": None,
+        "title": "", "artist": "", "album": "",
+    }
+    ffprobe = _ffprobe_path(ffmpeg)
+    if not ffprobe:
+        return info
+    try:
+        out = subprocess.run(
+            [ffprobe, "-v", "error", "-print_format", "json",
+             "-show_format", "-show_streams", media],
+            capture_output=True, text=True, timeout=30,
+        )
+        js = json.loads(out.stdout or "{}")
+    except Exception:
+        return info
+
+    fmt = js.get("format") or {}
+    try:
+        info["duration"] = float(fmt.get("duration") or 0) or None
+    except (TypeError, ValueError):
+        pass
+    # ffprobe 的标签键大小写不稳定（title / TITLE / Title 都见过）
+    tags = {str(k).lower(): str(v) for k, v in (fmt.get("tags") or {}).items()}
+    info["title"] = (tags.get("title") or "").strip()
+    info["artist"] = (tags.get("artist") or tags.get("album_artist") or "").strip()
+    info["album"] = (tags.get("album") or "").strip()
+
+    for s in js.get("streams") or []:
+        if s.get("codec_type") == "audio" and info["audio_codec"] is None:
+            info["audio_codec"] = s.get("codec_name")
+            try:
+                info["audio_duration"] = float(s.get("duration") or 0) or None
+            except (TypeError, ValueError):
+                pass
+        disp = s.get("disposition") or {}
+        if disp.get("attached_pic") == 1 and info["cover_index"] is None:
+            info["cover_index"] = s.get("index")
+            info["cover_codec"] = s.get("codec_name")
+    return info
+
+
+_COVER_EXT = {"mjpeg": ".jpg", "jpeg": ".jpg", "png": ".png",
+              "bmp": ".bmp", "webp": ".webp", "gif": ".gif"}
+
+
+def extract_cover(ffmpeg: str, media: str, info: dict, out_dir: str) -> str | None:
+    """把内嵌封面导出成图片文件，返回路径；没有封面或导出失败返回 None。"""
+    idx = info.get("cover_index")
+    if idx is None:
+        return None
+    ext = _COVER_EXT.get(str(info.get("cover_codec") or "").lower(), "")
+    # 先试无损拷贝（mjpeg → .jpg），失败再解码成 png
+    attempts = []
+    if ext:
+        attempts.append((os.path.join(out_dir, "cover" + ext), ["-c:v", "copy"]))
+    attempts.append((os.path.join(out_dir, "cover.png"), ["-c:v", "png"]))
+    for dst, codec_args in attempts:
+        cmd = [ffmpeg, "-y", "-v", "error", "-i", media, "-map", f"0:{idx}",
+               "-frames:v", "1", *codec_args, dst]
+        try:
+            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.PIPE, timeout=60)
+        except Exception:
+            continue
+        if os.path.isfile(dst) and os.path.getsize(dst) > 0:
+            return dst
+    return None
+
+
+def _filter_quote(path: str) -> str:
+    """滤镜图里的路径引号：单引号包裹，内部单引号按 ffmpeg 规则断开转义。"""
+    return "'" + path.replace("'", r"'\''") + "'"
+
+
+def _text_units(text: str) -> float:
+    """粗估文字宽度（以字号为 1 个单位）：全角 1.0，半角 0.58。"""
+    return sum(1.0 if unicodedata.east_asian_width(ch) in ("W", "F") else 0.58
+               for ch in text)
+
+
+def _truncate(text: str, limit: int = 56) -> str:
+    """过长的歌名截断加省略号（配合缩字号，保证不出画面）。"""
+    text = text.strip()
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
+def _fit_fontsize(text: str, base: int, max_px: int) -> int:
+    """歌名太长就按比例缩字号，保证不出画面。"""
+    units = _text_units(text)
+    if units <= 0:
+        return base
+    est = units * base
+    if est <= max_px:
+        return base
+    return max(12, int(base * max_px / est))
+
+
+def _write_text(work_dir: str, name: str, text: str) -> str:
+    """把文字写进文件，用 textfile= 传给 drawtext。
+
+    这样完全绕开 drawtext 的转义地狱（冒号、引号、逗号、反斜杠、% 都要特殊处理）。
+    """
+    p = os.path.join(work_dir, name)
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(text.replace("\n", " ").replace("\r", " ").strip())
+    return p
+
+
+def build_drawtext(title: str, artist: str, width: int, height: int,
+                   work_dir: str | None, font: str | None,
+                   center: bool = False) -> str:
+    """拼 drawtext 滤镜串（不含前后逗号）；没有字体/没有文字时返回空串。"""
+    if not font or not work_dir:
+        return ""
+    parts: list[str] = []
+    t_size = max(12, int(height * 0.061))
+    a_size = max(10, int(height * 0.036))
+    max_w = int(width * 0.82)
+
+    if center:
+        block = t_size + max(6, int(height * 0.026)) + a_size
+        ty = max(0, int((height - block) / 2))
+        ay = ty + t_size + max(6, int(height * 0.026))
+    else:
+        ty = int(height * 0.754)
+        ay = ty + int(height * 0.086)
+
+    if title:
+        title = _truncate(title)
+        p = _write_text(work_dir, "title.txt", title)
+        s = _fit_fontsize(title, t_size, max_w)
+        parts.append(
+            f"drawtext=fontfile={_filter_quote(font)}:textfile={_filter_quote(p)}"
+            f":fontcolor=white:fontsize={s}:x=(w-text_w)/2:y={ty}"
+        )
+    if artist:
+        artist = _truncate(artist, 48)
+        p = _write_text(work_dir, "artist.txt", artist)
+        s = _fit_fontsize(artist, a_size, max_w)
+        parts.append(
+            f"drawtext=fontfile={_filter_quote(font)}:textfile={_filter_quote(p)}"
+            f":fontcolor=white@0.72:fontsize={s}:x=(w-text_w)/2:y={ay}"
+        )
+    return ",".join(parts)
+
+
+def build_cover_command(
+    ffmpeg: str,
+    audio_path: str,
+    output_path: str,
+    width: int,
+    height: int,
+    fps: int,
+    crf: int,
+    audio_codec: str,
+    overwrite: bool,
+    duration: float | None,
+    cover_path: str | None = None,
+    title: str = "",
+    artist: str = "",
+    work_dir: str | None = None,
+    font: str | None = None,
+) -> list[str]:
+    """封面模式命令：模糊放大的封面铺底 + 居中封面 + 底部歌名/歌手。
+
+    cover_path 为 None 时退化成「黑底 + 居中文字」（原文件没有内嵌封面）。
+    画面用 -loop 1 循环单张图，再用 -t 卡到音频时长，避免 1fps 下 -shortest 不准。
+    """
+    art = build_drawtext(title, artist, width, height, work_dir, font,
+                         center=not cover_path)
+    cmd = [ffmpeg, "-y" if overwrite else "-n"]
+
+    if cover_path:
+        cmd += ["-loop", "1", "-framerate", str(fps), "-i", cover_path]
+        cmd += ["-i", audio_path]
+        amap = "1:a"
+        cover_h = max(2, int(round(height * 0.560)) // 2 * 2)
+        blur = max(2, int(round(height * 0.055)))
+        dy = int(round(height * -0.069))
+        graph = (
+            "[0:v]split=2[b][f];"
+            f"[b]scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},gblur=sigma={blur},"
+            "eq=brightness=-0.24:saturation=1.2[bg];"
+            f"[f]scale=-2:{cover_h}[fg];"
+            f"[bg][fg]overlay=(W-w)/2:(H-h)/2{dy:+d}"
+        )
+        if art:
+            graph += "," + art
+        graph += "[v]"
+    else:
+        color = f"color=c=black:s={width}x{height}:r={fps}"
+        if duration:
+            color += f":d={duration:.3f}"
+        cmd += ["-i", audio_path, "-f", "lavfi", "-i", color]
+        amap = "0:a"
+        graph = "[1:v]"
+        if art:
+            graph += art
+        graph += "[v]"
+
+    cmd += ["-filter_complex", graph, "-map", "[v]", "-map", amap,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", str(crf),
+            "-pix_fmt", "yuv420p"]
+    if not cover_path:
+        # 纯黑底仍要全范围（见 build_command 注释）；封面图走正常范围转换
+        cmd += ["-color_range", "2"]
+    cmd += ["-c:a", audio_codec]
+    if audio_codec == "aac":
+        cmd += ["-b:a", "192k"]
+    if duration:
+        # 黑屏分支靠 color 的 d= 收尾，但 1fps 下 d=5.042 会补到第 6 帧（6s），
+        # 徒手多出 1 秒；统一用 -t 卡死输出时长。
+        # 这里刻意不加 -shortest：实测它会让音轨提前 50ms 收尾（比 -t 的 26ms 还多），
+        # 而且它会和 1fps 的帧边界打架。真正的残损文件另有长度校验兜底。
+        cmd += ["-t", f"{duration:.3f}"]
+    cmd += ["-movflags", "+faststart", output_path]
+    return cmd
+
+
 def build_command(
     ffmpeg: str,
     audio_path: str,
@@ -237,8 +495,15 @@ def convert_one(
     overwrite: bool,
     log=print,
     output_format: str = "mp4",
+    video_mode: str = "black",
+    font: str | None = None,
 ) -> bool:
-    """转换单个文件。log 为可调用对象（CLI 用 print，GUI 用队列回调）。返回是否成功。"""
+    """转换单个文件。log 为可调用对象（CLI 用 print，GUI 用队列回调）。返回是否成功。
+
+    video_mode 只在 output_format == "mp4" 时生效：
+      black = 纯黑屏（最省体积，平台压制最友好）
+      cover = 专辑封面 + 模糊背景 + 歌名/歌手文字
+    """
     if not os.path.isfile(audio_path):
         log(f"[跳过] 输入文件不存在: {audio_path}")
         return False
@@ -246,15 +511,17 @@ def convert_one(
     # NCM(网易云私有格式)需先解码成临时音频文件，再交给 ffmpeg
     tmp = None
     src = audio_path
+    ncm_meta: dict = {}
+    ncm_cover: bytes = b""
     ext = os.path.splitext(audio_path)[1].lower()
     if ext == ".ncm":
         try:
-            from ncm_decoder import decode_ncm
+            from ncm_decoder import decode_ncm_ex
         except Exception as e:
             log(f"[跳过] NCM 解码不可用（缺 ncm_decoder）: {e}")
             return False
         try:
-            src = decode_ncm(audio_path)
+            src, ncm_meta, ncm_cover = decode_ncm_ex(audio_path)
             tmp = src
             log(f"[NCM] 已解密: {audio_path}  ->  {src}")
         except Exception as e:
@@ -275,24 +542,64 @@ def convert_one(
             log(f"[失败] QMC 解密出错 {audio_path}: {e}")
             return False
 
+    work: str | None = None
     try:
         if output_format == "mp4":
-            dur = _probe_duration(ffmpeg, src)
+            info = probe_media(ffmpeg, src)
+            dur = info["duration"]
             effective = audio_codec
             if audio_codec == "auto":
                 # 抖音等平台的“提取音频”认不准 FLAC-in-MP4 这类非标准组合：
                 # mp3/aac 原样封装，其余（flac/ape/wav/ogg/opus...）自动转 AAC。
-                codec = _probe_codec(ffmpeg, src)
+                codec = info["audio_codec"]
                 if codec in ("mp3", "aac"):
                     effective = "copy"
                     log(f"[音频] 源编码 {codec}，原样封装")
                 else:
                     effective = "aac"
                     log(f"[音频] 源编码 {codec or '未知'}，自动转 AAC（保证平台可提取音频）")
-            cmd = build_command(
-                ffmpeg, src, output_path, width, height, fps, crf, effective, overwrite,
-                video_duration=dur,
-            )
+
+            mode = video_mode
+            if mode == "cover" and not dur:
+                # 封面模式靠 -t 卡时长；探不到时长就退回黑屏，避免无限循环出片
+                log("[封面] 取不到音频时长，改用纯黑屏")
+                mode = "black"
+
+            if mode == "cover":
+                work = tempfile.mkdtemp(prefix="ktrans_cov_")
+                cover = None
+                if ncm_cover:
+                    # NCM 的封面是独立字节块，直接落盘
+                    cext = ".jpg" if ncm_cover[:3] == b"\xff\xd8\xff" else ".png"
+                    cover = os.path.join(work, "cover" + cext)
+                    with open(cover, "wb") as f:
+                        f.write(ncm_cover)
+                else:
+                    cover = extract_cover(ffmpeg, src, info, work)
+                if ncm_meta:
+                    from ncm_decoder import meta_summary
+                    n_title, n_artist, _ = meta_summary(ncm_meta)
+                else:
+                    n_title, n_artist = "", ""
+                title = n_title or info["title"] or \
+                    os.path.splitext(os.path.basename(audio_path))[0]
+                artist = n_artist or info["artist"]
+                font = find_font(font)
+                if cover is None:
+                    log("[封面] 源文件没有内嵌封面，改用黑底 + 文字")
+                elif not font:
+                    log("[封面] 没找到中文字体，跳过文字只放封面")
+                log(f"[封面] {title}" + (f" — {artist}" if artist else ""))
+                cmd = build_cover_command(
+                    ffmpeg, src, output_path, width, height, fps, crf,
+                    effective, overwrite, duration=dur, cover_path=cover,
+                    title=title, artist=artist, work_dir=work, font=font,
+                )
+            else:
+                cmd = build_command(
+                    ffmpeg, src, output_path, width, height, fps, crf,
+                    effective, overwrite, video_duration=dur,
+                )
         else:
             cmd = build_audio_command(ffmpeg, src, output_path, output_format, overwrite, log)
         log(f"[转换] {src}  ->  {output_path}")
@@ -302,14 +609,25 @@ def convert_one(
         log(f"[失败] {audio_path}\n{err[-2000:]}")
         return False
     finally:
-        if tmp and os.path.isfile(tmp):
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
+        for p in (tmp, work):
+            if p and os.path.exists(p):
+                try:
+                    if os.path.isdir(p):
+                        shutil.rmtree(p, ignore_errors=True)
+                    else:
+                        os.remove(p)
+                except OSError:
+                    pass
 
     size = os.path.getsize(output_path)
     log(f"[完成] {output_path}  ({size / 1024:.1f} KB)")
+    if output_format == "mp4":
+        # 兜底：视频比音频长出很多，说明源文件的时长头不实（截断/残损），
+        # 此时成片会是几分钟的静音封面——提醒一句，别让人以为是转换坏了。
+        oi = probe_media(ffmpeg, output_path)
+        vdur, adur = oi.get("duration"), oi.get("audio_duration")
+        if vdur and adur and vdur - adur > 5:
+            log(f"[提示] 视频比音频长 {vdur - adur:.1f}s，源文件可能被截断或时长信息不实")
     return True
 
 
@@ -331,8 +649,12 @@ def main() -> None:
                              "copy=一律原样不重编码；aac=一律转 AAC")
     parser.add_argument("--ffmpeg", help="ffmpeg 可执行文件路径（默认从 PATH 查找）")
     parser.add_argument("--format", default="mp4", choices=list(OUTPUT_FORMATS),
-                        help="输出格式：mp4=黑屏视频（默认，上传平台用）；"
+                        help="输出格式：mp4=视频（默认，上传平台用）；"
                              "mp3/m4a/flac/wav=纯音频输出（解锁/转码）")
+    parser.add_argument("--video", default="black", choices=list(VIDEO_MODES),
+                        help="mp4 的画面：black=纯黑屏（默认，体积最小）；"
+                             "cover=专辑封面+模糊背景+歌名/歌手文字")
+    parser.add_argument("--font", help="drawtext 用的字体文件（封面模式，默认自动探测中文字体）")
     parser.add_argument("-y", "--overwrite", action="store_true",
                         help="覆盖已存在的输出文件（默认遇到同名会跳过报错）")
     args = parser.parse_args()
@@ -357,7 +679,8 @@ def main() -> None:
             else default_output(audio, args.format)
         out = unique_output(out, used)
         if convert_one(ffmpeg, audio, out, width, height, args.fps, args.crf,
-                       args.audio_codec, args.overwrite, output_format=args.format):
+                       args.audio_codec, args.overwrite, output_format=args.format,
+                       video_mode=args.video, font=args.font):
             ok += 1
         else:
             fail += 1

@@ -15,13 +15,16 @@ ncm_decoder.py — 网易云音乐 .ncm 私有格式解码器（纯标准库，�
 AES-128-ECB 与 RC4 均为本文件内自实现，无外部依赖。
 """
 
+import base64
+import json
 import os
 import struct
 import tempfile
 
 NCM_MAGIC = b"CTENFDAM"
 CORE_KEY = bytes.fromhex("687A4852416D736F356B496E62617857")
-META_KEY = bytes.fromhex("2331346C6A6B5F215C5D2630553C2728")  # 备用，本工具不解析元数据
+META_KEY = bytes.fromhex("2331346C6A6B5F215C5D2630553C2728")  # 元数据 AES 密钥
+META_PREFIX = b"163 key(Don't modify):"
 
 
 # ---------------- AES-128 (ECB, 纯 Python) ----------------
@@ -221,8 +224,43 @@ def _detect_ext(audio: bytes) -> str:
     return ".mp3"  # ffmpeg 仍能按内容探测
 
 
-def decode_ncm(path: str) -> str:
-    """解码 .ncm，返回解密后音频的临时文件路径（调用方负责删除）。"""
+def parse_meta(meta_raw: bytes) -> dict:
+    """解析 NCM 元数据块 → dict（含 musicName / artist / album / albumPic ...）。
+
+    结构：明文前缀 b"163 key(Don't modify):" + base64(AES-128-ECB(META_KEY, JSON))，
+    解密后还要去掉 b"music:" 前缀。任何一步不符就返回空 dict（不影响音频解码）。
+    """
+    if not meta_raw or not meta_raw.startswith(META_PREFIX):
+        return {}
+    try:
+        enc = base64.b64decode(meta_raw[len(META_PREFIX):])
+        dec = pkcs7_unpad(aes_ecb(enc, META_KEY, encrypt=False))
+        if dec[:6] == b"music:":
+            dec = dec[6:]
+        obj = json.loads(dec.decode("utf-8", "ignore"))
+        return obj if isinstance(obj, dict) else {}
+    except Exception:
+        return {}
+
+
+def meta_summary(meta: dict) -> tuple[str, str, str]:
+    """从 NCM 元数据里取 (标题, 歌手, 专辑)。artist 是 [[名字, id], ...] 结构。"""
+    title = str(meta.get("musicName") or "").strip()
+    album = str(meta.get("album") or "").strip()
+    names: list[str] = []
+    for a in meta.get("artist") or []:
+        if isinstance(a, (list, tuple)) and a:
+            names.append(str(a[0]))
+        elif isinstance(a, str):
+            names.append(a)
+    return title, " / ".join(n for n in names if n), album
+
+
+def decode_ncm_ex(path: str) -> tuple[str, dict, bytes]:
+    """解码 .ncm，返回 (临时音频路径, 元数据 dict, 封面图字节)。
+
+    封面字节可能为空（部分文件无封面）。调用方负责删除临时音频文件。
+    """
     with open(path, "rb") as f:
         data = f.read()
     if data[:8] != NCM_MAGIC:
@@ -233,11 +271,12 @@ def decode_ncm(path: str) -> str:
     key_data = data[off:off+key_len]; off += key_len
 
     meta_len = struct.unpack("<I", data[off:off+4])[0]; off += 4
-    off += meta_len  # 元数据（本工具不解析）
+    meta_raw = data[off:off+meta_len]; off += meta_len
+    meta = parse_meta(meta_raw)
     off += 5  # 保留字段
     off += 4  # image_space
     image_size = struct.unpack("<I", data[off:off+4])[0]; off += 4
-    off += image_size  # 封面
+    cover = data[off:off+image_size]; off += image_size
     audio_enc = data[off:]
 
     xored = bytes(b ^ 0x64 for b in key_data)
@@ -256,7 +295,12 @@ def decode_ncm(path: str) -> str:
     fd, tmp = tempfile.mkstemp(suffix=ext, prefix="ncm_")
     with os.fdopen(fd, "wb") as out:
         out.write(audio)
-    return tmp
+    return tmp, meta, cover
+
+
+def decode_ncm(path: str) -> str:
+    """解码 .ncm，返回解密后音频的临时文件路径（调用方负责删除）。"""
+    return decode_ncm_ex(path)[0]
 
 
 if __name__ == "__main__":

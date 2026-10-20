@@ -27,7 +27,7 @@ from mp3_to_mp4 import convert_one, default_output, find_ffmpeg, unique_output
 
 APP_NAME = "ktrans"
 APP_SUBTITLE = "音乐格式转换器"
-VERSION = "2.02"
+VERSION = "2.03"
 
 AUDIO_EXTS = (
     ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus",
@@ -306,6 +306,7 @@ class App:
         self.crf = tk.IntVar(value=18)
         self.audio_codec = tk.StringVar(value="auto")
         self.out_format = tk.StringVar(value="mp4")
+        self.video_mode = tk.StringVar(value="纯黑")
         self.count_text = tk.StringVar(value="尚未添加文件")
         self.status = tk.StringVar(value="准备就绪")
 
@@ -509,20 +510,22 @@ class App:
                    font=self.f_btn, width=64, height=26,
                    bg=self.pal["card"]).pack(side="left", padx=8)
 
-        # 高级行：仅黑屏视频（mp4）模式可见
+        # 高级行：仅视频（mp4）输出时可见
         self.adv_row = tk.Frame(form, bg=self.pal["card"])
-        self._ctl_label(self.adv_row, "分辨率")
+        self._ctl_label(self.adv_row, "画面")
+        ttk.Combobox(self.adv_row, textvariable=self.video_mode, width=5,
+                     values=["纯黑", "封面"], state="readonly").pack(side="left")
+        self._ctl_label(self.adv_row, "分辨率", pad=(12, 6))
         ttk.Entry(self.adv_row, textvariable=self.resolution,
-                  width=10).pack(side="left")
-        self._ctl_label(self.adv_row, "帧率", pad=(14, 6))
+                  width=9).pack(side="left")
+        self._ctl_label(self.adv_row, "帧率", pad=(12, 6))
         ttk.Spinbox(self.adv_row, from_=1, to=30, textvariable=self.fps,
-                    width=4).pack(side="left")
-        self._ctl_label(self.adv_row, "质量", pad=(14, 6))
+                    width=3).pack(side="left")
+        self._ctl_label(self.adv_row, "质量", pad=(12, 6))
         ttk.Spinbox(self.adv_row, from_=0, to=51, textvariable=self.crf,
-                    width=4).pack(side="left")
-        tk.Label(self.adv_row, text="仅黑屏视频模式生效（CRF 0–51，18 已近无损）",
-                 bg=self.pal["card"], fg=self.pal["gray"],
-                 font=self.f_sub).pack(side="left", padx=10)
+                    width=3).pack(side="left")
+        tk.Label(self.adv_row, text="近无损", bg=self.pal["card"],
+                 fg=self.pal["gray"], font=self.f_sub).pack(side="left", padx=(12, 0))
 
         self.out_format.trace_add("write", lambda *_: self._toggle_adv())
         self._toggle_adv()
@@ -783,11 +786,13 @@ class App:
         threading.Thread(
             target=self._worker,
             args=(ffmpeg, out_dir, w, h, self.fps.get(),
-                  self.crf.get(), self.audio_codec.get(), self.out_format.get()),
+                  self.crf.get(), self.audio_codec.get(), self.out_format.get(),
+                  "cover" if self.video_mode.get() == "封面" else "black"),
             daemon=True,
         ).start()
 
-    def _worker(self, ffmpeg, out_dir, w, h, fps, crf, codec, out_fmt="mp4") -> None:
+    def _worker(self, ffmpeg, out_dir, w, h, fps, crf, codec, out_fmt="mp4",
+                video_mode="black") -> None:
         ok = total = 0
         n = len(self.files)
         with concurrent.futures.ThreadPoolExecutor(
@@ -802,7 +807,7 @@ class App:
                 )
                 futs[ex.submit(
                     convert_one, ffmpeg, f, out, w, h, fps, crf, codec, True,
-                    lambda m: self.log_q.put(m), out_fmt,
+                    lambda m: self.log_q.put(m), out_fmt, video_mode,
                 )] = out
             for fut in concurrent.futures.as_completed(futs):
                 if fut.result():
