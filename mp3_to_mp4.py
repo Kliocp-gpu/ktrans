@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 """
-mp3_to_mp4.py — 把音频（默认 mp3）封装成 mp4，视频轨为纯黑屏。
+mp3_to_mp4.py — KTrans 转换核心：音频 → 视频 / 纯音频。
 
-单文件、零第三方依赖，仅调用系统已安装的 ffmpeg。
-核心函数（find_ffmpeg / build_command / convert_one）同时被 CLI 与 GUI 复用。
+三种出片方式（`--video` / `--format` 控制）：
+  black  纯黑屏 mp4（默认）。像素值 Y=0 的真黑，体积最小，专治"只收视频"的平台
+  cover  封面模式。内嵌专辑图导出 → 模糊放大铺底 + 居中封面 + 歌名/歌手文字；
+         没有封面的文件自动退成"黑底 + 居中歌名"
+  其余   纯音频输出 mp3 / m4a / flac / wav，同源编码直接 copy 无损
+
+加密格式先经 ncm_decoder（网易云 .ncm）/ qmc_decoder（QQ 音乐 .qmc/.mflac/.mgg）解密，
+再交给 ffmpeg。零第三方依赖，只调用系统 ffmpeg；核心函数同时被 CLI 与 GUI 复用。
 
 用法:
     python mp3_to_mp4.py song.mp3
-    python mp3_to_mp4.py song.mp3 -o out.mp4
-    python mp3_to_mp4.py song.mp3 --resolution 1920x1080 --fps 1
-    python mp3_to_mp4.py a.mp3 b.mp3 c.mp3          # 批量，各自生成同名 mp4
+    python mp3_to_mp4.py song.ncm --video cover -r 1920x1080
+    python mp3_to_mp4.py song.flac --format flac
+    python mp3_to_mp4.py a.mp3 b.mp3 c.mp3          # 批量，各自生成同名输出
 
 依赖: ffmpeg（需在 PATH 中，或用 --ffmpeg 指定路径）
 """

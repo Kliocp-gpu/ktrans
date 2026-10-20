@@ -2,11 +2,11 @@
 
 # 🎵 KTrans
 
-**拖进来，转出去。MP3 / NCM / FLAC / WAV → 黑屏 MP4，一步到位。**
+**拖进来，转出去。加密音乐、MP3 / FLAC / WAV → 黑屏视频、封面视频、纯音频，一个软件搞定。**
 
 *Drag. Drop. Converted.*
 
-[![Version](https://img.shields.io/badge/version-1.00-blue)](../../releases)
+[![Version](https://img.shields.io/badge/version-2.03-blue)](../../releases)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)]()
 [![Python](https://img.shields.io/badge/python-3.11+-yellow)]()
@@ -15,8 +15,11 @@
 
 ---
 
-把音频变成**真·纯黑屏**的视频文件 —— 专为那些"只收视频"的上传平台而生（抖音 / B站 / 视频号…）。
-顺带把网易云的 `.ncm` 私有格式也解了。
+把音乐变成平台要的视频 —— 专为那些"只收视频"的上传平台而生（抖音 / B站 / 视频号…）。
+两种画面随你挑：**真·纯黑屏**（体积最小、压制最友好），或者**专辑封面 + 模糊背景 + 歌名**
+（看着像个正经作品）。不想出视频也行，直接导出 mp3 / m4a / flac / wav。
+
+网易云 `.ncm` 与 QQ 音乐 `.qmc / .mflac / .mgg` 全部内置解密，加密文件拖进来就是能用的成品。
 
 </div>
 

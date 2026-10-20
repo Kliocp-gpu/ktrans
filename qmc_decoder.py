@@ -4,7 +4,7 @@ qmc_decoder.py — QQ 音乐 QMC / MFLAC / MGG 私有格式解密（纯 Python�
 
 算法移植自 unlock-music（MIT License）开源实现：
     https://git.unlock-music.dev/um/cli （algo/qmc/*.go）
-移植过程中用上游 Go 代码生成的确定性测试向量逐字节比对验证（见 .workbuddy/qmc-verify）。
+移植时用上游 Go 代码生成的确定性测试向量逐字节比对验证（真实 ekey 与真实加密文件都跑过）。
 
 覆盖：
 - QMCv1 静态密钥：尾标既不是 QTag/STag/MusicEx 也不是裸密钥长度时的默认算法

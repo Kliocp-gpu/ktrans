@@ -2,11 +2,11 @@
 
 # 🎵 KTrans
 
-**Drag. Drop. Converted.** MP3 / NCM / FLAC / WAV → pure-black MP4, in one step.
+**Drag. Drop. Converted.** Encrypted music, MP3 / FLAC / WAV → black-screen video, cover video, or plain audio — one app.
 
 *拖进来，转出去。*
 
-[![Version](https://img.shields.io/badge/version-1.00-blue)](../../releases)
+[![Version](https://img.shields.io/badge/version-2.03-blue)](../../releases)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)]()
 [![Python](https://img.shields.io/badge/python-3.11+-yellow)]()
@@ -15,8 +15,13 @@
 
 ---
 
-Turn audio into **truly pure-black** video files — built for platforms that only accept video uploads (TikTok / Douyin / Bilibili…).
-And it decodes NetEase Cloud Music's `.ncm` private format along the way.
+Turn music into the video file platforms demand — built for places that only accept video uploads
+(TikTok / Douyin / Bilibili…). Pick either picture: **truly pure black** (smallest file, friendliest to
+re-encoding), or **album art + blurred backdrop + title** (looks like an actual release). Not in the mood
+for video? Export mp3 / m4a / flac / wav instead.
+
+NetEase `.ncm` and QQ Music `.qmc / .mflac / .mgg` are decrypted in-app — drop an encrypted file in and
+get something usable out.
 
 </div>
 

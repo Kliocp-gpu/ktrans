@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """
-mp3_to_mp4_gui.py — 音频 → 纯黑屏 MP4 转换器（Tkinter）。
+mp3_to_mp4_gui.py — KTrans 图形界面（Tkinter）。
 
-界面参考 Filee（KnifeLemon/Filee）：左侧导航栏 + 中间大拖放区 + 分页内容，留白大、文字少。
+左侧导航（转换 / 最近转换 / 日志 / 关于）+ 顶部设置卡 + 文件列表，
+列表里没有文件时，整块区域本身就是拖放区。转换逻辑全部来自 mp3_to_mp4.py：
+纯黑屏、封面模式、纯音频三种产出，以及 NCM / QMC 解密都在那边。
+
+界面参考 Filee（KnifeLemon/Filee）：留白大、文字少、胶囊导航。
 macOS 说明：Aqua 主题会接管 ttk 控件的 padding/背景/悬停态，style.configure() 基本无效，
-所以导航、卡片、拖放区这些“自定义外观”的部分用原生 tk 控件（背景/前景可控），
-按钮、输入框、进度条、列表仍用 ttk（本身就是 NSButton/NSTextField，跟着系统深浅色走）。
+所以导航、卡片、按钮这些"自定义外观"的部分用原生 tk 控件 / Canvas 自绘（背景前景可控），
+输入框、进度条、列表仍用 ttk（本身就是 NSTextField 一类，跟着系统深浅色走）。
 深浅色通过读系统的 AppleInterfaceStyle 判断，用两套苹果系统配色。
-拖拽依赖 tkinterdnd2（可选，缺失时自动降级为按钮添加）。
+拖拽依赖 tkinterdnd2（可选，缺失时自动降级为按钮添加）；
+Dock 拖放/访达打开方式由 OdocWatcher 用 Carbon AppleEvent 实现（Tk 9 没有内置支持）。
 
 依赖: Python 标准库 + 系统 ffmpeg（转换逻辑见 mp3_to_mp4.py）。
 """
