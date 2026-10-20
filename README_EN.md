@@ -77,7 +77,8 @@ This produces `dist/ktrans.app` — double-click to run, or drag it into Applica
 
 ### GUI
 
-Drag files (or a whole folder) into the window. The sidebar shows conversion history, logs and settings.
+Drag files (or a whole folder) into the window — when the list is empty, the list area itself is the drop zone.
+The sidebar shows conversion history, logs and about.
 
 ### Command line
 

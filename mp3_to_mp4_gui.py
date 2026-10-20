@@ -334,6 +334,7 @@ class App:
         self.f_nav = base.copy(); self.f_nav.configure(size=13)
         self.f_sub = base.copy(); self.f_sub.configure(size=11)
         self.f_drop = base.copy(); self.f_drop.configure(size=14)
+        self.f_empty = base.copy(); self.f_empty.configure(size=16)
         self.f_btn = base.copy(); self.f_btn.configure(size=12)
 
     # ---------- 外壳：侧边栏 + 内容区 ----------
@@ -389,10 +390,10 @@ class App:
         # 顶部：设置卡片（原“输出设置”页并入主页）
         self._build_settings_card(p)
 
-        # 中部：文件列表卡片
-        list_card = Card(p, self.pal, radius=12, auto_height=False)
-        list_card.pack(fill="both", expand=True, padx=20, pady=(4, 10))
-        inner = list_card.inner
+        # 中部：文件列表卡片（空状态与列表共用同一块区域，拖放目标就是它）
+        self.list_card = Card(p, self.pal, radius=12, auto_height=False)
+        self.list_card.pack(fill="both", expand=True, padx=20, pady=(4, 10))
+        inner = self.list_card.inner
 
         bar = tk.Frame(inner, bg=self.pal["card"])
         bar.pack(fill="x", padx=8, pady=(8, 4))
@@ -407,31 +408,27 @@ class App:
         tk.Label(bar, textvariable=self.count_text, bg=self.pal["card"],
                  fg=self.pal["gray"], font=self.f_sub).pack(side="right", padx=4)
 
-        wrap = tk.Frame(inner, bg=self.pal["card"])
-        wrap.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        # 卡片主体：列表 与 空状态 二选一占位
+        self.list_body = tk.Frame(inner, bg=self.pal["card"])
+        self.list_body.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+
+        # —— 有文件时：列表 ——
+        self.tree_wrap = tk.Frame(self.list_body, bg=self.pal["card"])
         self.tree = ttk.Treeview(
-            wrap, columns=("name", "size"), show="headings", height=8
+            self.tree_wrap, columns=("name", "size"), show="headings", height=8
         )
         self.tree.heading("name", text="文件")
         self.tree.heading("size", text="大小")
         self.tree.column("name", width=460, anchor="w")
         self.tree.column("size", width=90, anchor="e")
-        sb = ttk.Scrollbar(wrap, orient="vertical", command=self.tree.yview)
+        sb = ttk.Scrollbar(self.tree_wrap, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=sb.set)
         self.tree.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
 
-        # 下部：拖放卡片（slim，圆角，悬停描边反馈）
-        self.drop_zone = Card(p, self.pal, radius=12, height=88, auto_height=False)
-        self.drop_zone.pack(fill="x", padx=20, pady=(0, 10))
-        dz_wrap = tk.Frame(self.drop_zone.inner, bg=self.pal["card"])
-        dz_wrap.place(relx=0.5, rely=0.5, anchor="center")
-        dz = "把音频拖到这里" if self.dnd_enabled else "添加音频开始"
-        tk.Label(dz_wrap, text=dz, bg=self.pal["card"], fg=self.pal["text"],
-                 font=self.f_drop).pack()
-        tk.Label(dz_wrap, text="支持 mp3 / wav / flac / ncm / qmc / mflac 等",
-                 bg=self.pal["card"], fg=self.pal["gray"],
-                 font=self.f_sub).pack(pady=(4, 0))
+        # —— 没有文件时：空状态（本身就是拖放区） ——
+        self._build_empty_state()
+        self._sync_empty_state()
 
         # 底部：开始按钮（固定宽度居中，不再整行铺满）+ 进度 + 状态
         bottom = tk.Frame(p, bg=self.pal["bg"])
@@ -445,6 +442,47 @@ class App:
         self.prog.pack(fill="x", pady=(10, 4))
         tk.Label(bottom, textvariable=self.status, bg=self.pal["bg"],
                  fg=self.pal["gray"], font=self.f_sub).pack(anchor="w")
+
+    # ---------- 空状态（列表区域的占位形态） ----------
+    def _build_empty_state(self) -> None:
+        """列表为空时，整个列表区域变成一个大拖放区：图标 + 主文案 + 副文案。"""
+        self.empty = tk.Frame(self.list_body, bg=self.pal["card"])
+        box = tk.Frame(self.empty, bg=self.pal["card"])
+        box.place(relx=0.5, rely=0.5, anchor="center")
+
+        # 圆环 + 下箭头（Canvas 自绘，避免依赖图片资源）
+        self.empty_icon = tk.Canvas(box, width=64, height=64, bd=0,
+                                    highlightthickness=0, bg=self.pal["card"])
+        self.empty_icon.pack()
+        c = self.pal["accent"]
+        self.empty_icon.create_oval(7, 7, 57, 57, outline=c, width=2)
+        self.empty_icon.create_line(32, 21, 32, 43, fill=c, width=2)
+        self.empty_icon.create_line(22, 34, 32, 44, 42, 34, fill=c, width=2,
+                                    capstyle="round", joinstyle="round")
+
+        self.empty_title = tk.Label(
+            box, text="把音频拖到这里" if self.dnd_enabled else "添加音频开始",
+            bg=self.pal["card"], fg=self.pal["text"], font=self.f_empty,
+        )
+        self.empty_title.pack(pady=(6, 0))
+        self.empty_hint = tk.Label(
+            box, text="或点击上方「添加文件」· 支持 mp3 / wav / flac / ncm / qmc / mflac 等",
+            bg=self.pal["card"], fg=self.pal["gray"], font=self.f_sub,
+        )
+        self.empty_hint.pack(pady=(6, 0))
+
+    def _sync_empty_state(self) -> None:
+        """列表区在「空状态」与「文件列表」之间切换，同一时刻只显示一个。"""
+        want_empty = not self.files
+        if getattr(self, "_empty_shown", None) == want_empty:
+            return
+        self._empty_shown = want_empty
+        if want_empty:
+            self.tree_wrap.pack_forget()
+            self.empty.pack(fill="both", expand=True)
+        else:
+            self.empty.pack_forget()
+            self.tree_wrap.pack(fill="both", expand=True)
 
     # ---------- 设置卡片（并入转换页顶部） ----------
     def _ctl_label(self, parent, text: str, pad=(0, 6)) -> None:
@@ -570,17 +608,27 @@ class App:
     # ---------- 拖拽 ----------
     def _enable_dnd(self) -> None:
         from tkinterdnd2 import DND_FILES
-        for w in (self.drop_zone, self.tree, self.root):
-            w.drop_target_register(DND_FILES)
-            w.dnd_bind("<<Drop>>", self._on_drop)
-            w.dnd_bind("<<DropEnter>>", self._on_drop_enter)
-            w.dnd_bind("<<DropLeave>>", self._on_drop_leave)
+        # 空状态里的子控件覆盖在卡片上，也要注册，否则没文件时拖不进来
+        targets = [
+            self.list_card, self.list_card.inner, self.list_body,
+            self.tree_wrap, self.tree,
+            self.empty, self.empty_icon, self.empty_title, self.empty_hint,
+            self.root,
+        ]
+        for w in targets:
+            try:
+                w.drop_target_register(DND_FILES)
+                w.dnd_bind("<<Drop>>", self._on_drop)
+                w.dnd_bind("<<DropEnter>>", self._on_drop_enter)
+                w.dnd_bind("<<DropLeave>>", self._on_drop_leave)
+            except Exception:
+                continue
 
     def _on_drop_enter(self, event) -> None:
-        self.drop_zone.set_ring(self.pal["accent"])
+        self.list_card.set_ring(self.pal["accent"])
 
     def _on_drop_leave(self, event) -> None:
-        self.drop_zone.set_ring(None)
+        self.list_card.set_ring(None)
 
     def _on_drop(self, event) -> None:
         self._on_drop_leave(event)
@@ -663,6 +711,7 @@ class App:
     def _refresh_count(self) -> None:
         n = len(self.files)
         self.count_text.set("尚未添加文件" if n == 0 else f"共 {n} 个文件")
+        self._sync_empty_state()
 
     def _remove_selected(self) -> None:
         for iid in self.tree.selection():
