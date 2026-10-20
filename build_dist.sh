@@ -28,6 +28,32 @@ PYBASE="$("$PY" -c 'import sys; print(sys.base_prefix)')"
 TCLLIB="$PYBASE/lib"
 echo "✓ 构建解释器：$PYBASE"
 
+# 0. 给 py2app 打补丁（幂等，重复跑不会重复改）
+#    python-build-standalone 把 zlib 静态编进了解释器（模块没有 __file__），
+#    py2app 0.28 的 build_app.py 里 copy_file(zlib.__file__) 会直接 AttributeError。
+for p in "$VENV"/lib/python*/site-packages/py2app/build_app.py; do
+  [ -f "$p" ] || continue
+  if ! grep -q "_zlib_file" "$p"; then
+    "$PY" - "$p" <<'PYEOF'
+import sys
+path = sys.argv[1]
+src = open(path).read()
+old = ("            import zlib\n\n"
+       "            self.copy_file(zlib.__file__, os.path.dirname(arcdir))")
+new = ("            import zlib\n\n"
+       "            # 补丁（ktrans）：内建 zlib 没有 __file__，跳过拷贝即可\n"
+       "            _zlib_file = getattr(zlib, \"__file__\", None)\n"
+       "            if _zlib_file:\n"
+       "                self.copy_file(_zlib_file, os.path.dirname(arcdir))")
+if old in src:
+    open(path, "w").write(src.replace(old, new))
+    print("✓ 已给 py2app 打 zlib 补丁")
+else:
+    print(f"! py2app 版本不同，补丁没打上：{path}")
+PYEOF
+  fi
+done
+
 # 1. py2app 主流程
 #    两个目录都放到项目外的临时位置，原因有二：
 #      a) build/、dist/ 每次重建都要删几十上百个文件，会被沙箱的批量删除保护拦下；
