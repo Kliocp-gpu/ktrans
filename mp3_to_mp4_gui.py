@@ -185,6 +185,7 @@ class App:
         self.fps = tk.IntVar(value=1)
         self.crf = tk.IntVar(value=18)
         self.audio_codec = tk.StringVar(value="auto")
+        self.out_format = tk.StringVar(value="mp4")
         self.count_text = tk.StringVar(value="尚未添加文件")
         self.status = tk.StringVar(value="准备就绪")
 
@@ -354,8 +355,17 @@ class App:
         FlatButton(f0, text="选择…", command=self._choose_out, pal=self.pal,
                    font=self.f_btn, width=76).pack(side="left", padx=8)
 
+        f_fmt = tk.Frame(form, bg=self.pal["bg"])
+        row("输出格式", lambda: f_fmt, 1)
+        ttk.Combobox(f_fmt, textvariable=self.out_format, width=6,
+                     values=["mp4", "mp3", "m4a", "flac", "wav"],
+                     state="readonly").pack(side="left")
+        tk.Label(f_fmt, text="mp4＝黑屏视频（传平台）；其余＝纯音频（解密/转码）",
+                 bg=self.pal["bg"], fg=self.pal["gray"],
+                 font=self.f_sub).pack(side="left", padx=10)
+
         f1 = tk.Frame(form, bg=self.pal["bg"])
-        row("分辨率", lambda: f1, 1)
+        row("分辨率", lambda: f1, 2)
         ttk.Entry(f1, textvariable=self.resolution, width=12).pack(side="left")
         tk.Label(f1, text="帧率", bg=self.pal["bg"], fg=self.pal["text"],
                  font=self.f_nav).pack(side="left", padx=(16, 6))
@@ -364,7 +374,7 @@ class App:
                  fg=self.pal["gray"], font=self.f_sub).pack(side="left", padx=10)
 
         f2 = tk.Frame(form, bg=self.pal["bg"])
-        row("音频", lambda: f2, 2)
+        row("音频", lambda: f2, 3)
         ttk.Combobox(f2, textvariable=self.audio_codec, width=8,
                      values=["auto", "copy", "aac"], state="readonly").pack(side="left")
         tk.Label(f2, text="auto＝推荐上传：mp3/aac 原样，其余（flac/ncm 等）自动转 AAC",
@@ -372,7 +382,7 @@ class App:
                  font=self.f_sub).pack(side="left", padx=10)
 
         f3 = tk.Frame(form, bg=self.pal["bg"])
-        row("视频质量", lambda: f3, 3)
+        row("视频质量", lambda: f3, 4)
         ttk.Spinbox(f3, from_=0, to=51, textvariable=self.crf, width=5).pack(side="left")
         tk.Label(f3, text="CRF 0–51，越小越清晰越大（黑屏下 18 已近无损）",
                  bg=self.pal["bg"], fg=self.pal["gray"],
@@ -621,11 +631,11 @@ class App:
         threading.Thread(
             target=self._worker,
             args=(ffmpeg, out_dir, w, h, self.fps.get(),
-                  self.crf.get(), self.audio_codec.get()),
+                  self.crf.get(), self.audio_codec.get(), self.out_format.get()),
             daemon=True,
         ).start()
 
-    def _worker(self, ffmpeg, out_dir, w, h, fps, crf, codec) -> None:
+    def _worker(self, ffmpeg, out_dir, w, h, fps, crf, codec, out_fmt="mp4") -> None:
         ok = total = 0
         n = len(self.files)
         with concurrent.futures.ThreadPoolExecutor(
@@ -636,11 +646,11 @@ class App:
             for f in self.files:
                 # 同名不同格式、或不同专辑里的同名曲目会撞成同一个输出，这里加序号区分
                 out = unique_output(
-                    os.path.join(out_dir, os.path.basename(default_output(f))), used
+                    os.path.join(out_dir, os.path.basename(default_output(f, out_fmt))), used
                 )
                 futs[ex.submit(
                     convert_one, ffmpeg, f, out, w, h, fps, crf, codec, True,
-                    lambda m: self.log_q.put(m),
+                    lambda m: self.log_q.put(m), out_fmt,
                 )] = out
             for fut in concurrent.futures.as_completed(futs):
                 if fut.result():

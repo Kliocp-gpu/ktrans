@@ -29,6 +29,9 @@ QMC_EXTS = (
     ".bkcmp3", ".bkcm4a", ".bkcflac", ".bkcwav", ".bkcape", ".bkcogg", ".bkcwma",
 )
 
+# 输出格式：mp4 = 黑屏视频（上传平台）；其余 = 纯音频输出（解锁/转码）
+OUTPUT_FORMATS = ("mp4", "mp3", "m4a", "flac", "wav")
+
 
 def find_ffmpeg(explicit: str | None) -> str:
     """返回可用的 ffmpeg 路径；找不到则抛 RuntimeError（不在此退出，交给调用方处理）。"""
@@ -58,10 +61,10 @@ def find_ffmpeg(explicit: str | None) -> str:
     )
 
 
-def default_output(input_path: str) -> str:
-    """输入 a/b/song.mp3 -> a/b/song.mp4。"""
+def default_output(input_path: str, fmt: str = "mp4") -> str:
+    """输入 a/b/song.mp3 -> a/b/song.<fmt>（默认 mp4）。"""
     base, _ = os.path.splitext(input_path)
-    return base + ".mp4"
+    return base + "." + fmt
 
 
 def unique_output(path: str, used: set[str] | None = None) -> str:
@@ -174,6 +177,54 @@ def build_command(
     return cmd
 
 
+def build_audio_command(
+    ffmpeg: str,
+    audio_path: str,
+    output_path: str,
+    fmt: str,
+    overwrite: bool,
+    log=print,
+) -> list[str]:
+    """纯音频输出命令：同源编码则 copy 无损，否则转码；尽量保留内嵌封面。
+
+    wav 容器不支持封面图，直接丢弃视频流；mp3/m4a/flac 用 `-map 0:v?`
+    可选映射带过去（disposition 随流自动保留，无需显式设置）。
+    """
+    codec = _probe_codec(ffmpeg, audio_path)
+    cmd = [ffmpeg, "-y" if overwrite else "-n", "-i", audio_path]
+    if fmt == "wav":
+        cmd += ["-map", "0:a", "-vn", "-c:a", "pcm_s16le"]
+        if codec != "pcm_s16le":
+            log(f"[音频] 源编码 {codec or '未知'}，转 PCM/WAV")
+        return cmd + [output_path]
+
+    cmd += ["-map", "0:a", "-map", "0:v?", "-c:v", "copy"]
+    if fmt == "mp3":
+        if codec == "mp3":
+            cmd += ["-c:a", "copy"]
+            log("[音频] 源编码 mp3，原样输出")
+        else:
+            cmd += ["-c:a", "libmp3lame", "-q:a", "2"]
+            log(f"[音频] 源编码 {codec or '未知'}，转 MP3 V2")
+    elif fmt == "m4a":
+        if codec == "aac":
+            cmd += ["-c:a", "copy"]
+            log("[音频] 源编码 aac，原样输出")
+        else:
+            cmd += ["-c:a", "aac", "-b:a", "192k"]
+            log(f"[音频] 源编码 {codec or '未知'}，转 AAC 192k")
+    elif fmt == "flac":
+        if codec == "flac":
+            cmd += ["-c:a", "copy"]
+            log("[音频] 源编码 flac，原样输出")
+        else:
+            cmd += ["-c:a", "flac"]
+            log(f"[音频] 源编码 {codec or '未知'}，转 FLAC（无损）")
+    else:
+        raise ValueError(f"不支持的音频输出格式: {fmt}")
+    return cmd + [output_path]
+
+
 def convert_one(
     ffmpeg: str,
     audio_path: str,
@@ -185,6 +236,7 @@ def convert_one(
     audio_codec: str,
     overwrite: bool,
     log=print,
+    output_format: str = "mp4",
 ) -> bool:
     """转换单个文件。log 为可调用对象（CLI 用 print，GUI 用队列回调）。返回是否成功。"""
     if not os.path.isfile(audio_path):
@@ -224,22 +276,25 @@ def convert_one(
             return False
 
     try:
-        dur = _probe_duration(ffmpeg, src)
-        effective = audio_codec
-        if audio_codec == "auto":
-            # 抖音等平台的“提取音频”认不准 FLAC-in-MP4 这类非标准组合：
-            # mp3/aac 原样封装，其余（flac/ape/wav/ogg/opus...）自动转 AAC。
-            codec = _probe_codec(ffmpeg, src)
-            if codec in ("mp3", "aac"):
-                effective = "copy"
-                log(f"[音频] 源编码 {codec}，原样封装")
-            else:
-                effective = "aac"
-                log(f"[音频] 源编码 {codec or '未知'}，自动转 AAC（保证平台可提取音频）")
-        cmd = build_command(
-            ffmpeg, src, output_path, width, height, fps, crf, effective, overwrite,
-            video_duration=dur,
-        )
+        if output_format == "mp4":
+            dur = _probe_duration(ffmpeg, src)
+            effective = audio_codec
+            if audio_codec == "auto":
+                # 抖音等平台的“提取音频”认不准 FLAC-in-MP4 这类非标准组合：
+                # mp3/aac 原样封装，其余（flac/ape/wav/ogg/opus...）自动转 AAC。
+                codec = _probe_codec(ffmpeg, src)
+                if codec in ("mp3", "aac"):
+                    effective = "copy"
+                    log(f"[音频] 源编码 {codec}，原样封装")
+                else:
+                    effective = "aac"
+                    log(f"[音频] 源编码 {codec or '未知'}，自动转 AAC（保证平台可提取音频）")
+            cmd = build_command(
+                ffmpeg, src, output_path, width, height, fps, crf, effective, overwrite,
+                video_duration=dur,
+            )
+        else:
+            cmd = build_audio_command(ffmpeg, src, output_path, output_format, overwrite, log)
         log(f"[转换] {src}  ->  {output_path}")
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     except subprocess.CalledProcessError as exc:
@@ -275,6 +330,9 @@ def main() -> None:
                         help="音频处理：auto=mp3/aac 原样、其余自动转 AAC（默认，推荐上传平台）；"
                              "copy=一律原样不重编码；aac=一律转 AAC")
     parser.add_argument("--ffmpeg", help="ffmpeg 可执行文件路径（默认从 PATH 查找）")
+    parser.add_argument("--format", default="mp4", choices=list(OUTPUT_FORMATS),
+                        help="输出格式：mp4=黑屏视频（默认，上传平台用）；"
+                             "mp3/m4a/flac/wav=纯音频输出（解锁/转码）")
     parser.add_argument("-y", "--overwrite", action="store_true",
                         help="覆盖已存在的输出文件（默认遇到同名会跳过报错）")
     args = parser.parse_args()
@@ -290,15 +348,16 @@ def main() -> None:
         sys.exit(f"[错误] {e}")
 
     if len(args.inputs) > 1 and args.output:
-        print("[提示] 传入多个输入时 -o/--output 被忽略，按同名生成 mp4。")
+        print("[提示] 传入多个输入时 -o/--output 被忽略，按同名生成。")
 
     ok = fail = 0
     used: set[str] = set()
     for audio in args.inputs:
-        out = args.output if (len(args.inputs) == 1 and args.output) else default_output(audio)
+        out = args.output if (len(args.inputs) == 1 and args.output) \
+            else default_output(audio, args.format)
         out = unique_output(out, used)
         if convert_one(ffmpeg, audio, out, width, height, args.fps, args.crf,
-                       args.audio_codec, args.overwrite):
+                       args.audio_codec, args.overwrite, output_format=args.format):
             ok += 1
         else:
             fail += 1
