@@ -147,6 +147,126 @@ class FlatButton(tk.Canvas):
         self.create_text(w // 2, h // 2, text=self.label, fill=self._fg(), font=self.font)
 
 
+class Card(tk.Canvas):
+    """圆角卡片容器。
+
+    Aqua 下 tk.Frame 没法圆角，这里用 Canvas 自绘圆角矩形当背景，
+    内容 Frame 内缩放置，四个角由卡片底色露出（与 FlatButton 同一画法）。
+    """
+
+    def __init__(self, master, pal: dict, radius: int = 12,
+                 fill: str | None = None, height: int | None = None,
+                 auto_height: bool = True) -> None:
+        super().__init__(master, bg=pal["bg"], bd=0, highlightthickness=0,
+                         height=height or 1)
+        self.pal = pal
+        self.radius = radius
+        self.fill_color = fill or pal["card"]
+        self.inner = tk.Frame(self, bg=self.fill_color)
+        self._win = self.create_window(0, 0, window=self.inner, anchor="nw")
+        self.bind("<Configure>", lambda e: self._layout())
+        if height is None and auto_height:
+            self.inner.bind("<Configure>", lambda e: self._auto_height())
+
+    def _layout(self) -> None:
+        w, h = self.winfo_width(), self.winfo_height()
+        if w < 4 or h < 4:
+            return
+        self.delete("cardbg")
+        r = min(self.radius, w // 2, h // 2)
+        c = self.fill_color
+        self.create_rectangle(r, 0, w - r, h, fill=c, outline=c, tags="cardbg")
+        self.create_rectangle(0, r, w, h - r, fill=c, outline=c, tags="cardbg")
+        for x, y, start in (
+            (0, 0, 90), (w - 2 * r, 0, 0), (0, h - 2 * r, 180), (w - 2 * r, h - 2 * r, 270)
+        ):
+            self.create_arc(x, y, x + 2 * r, y + 2 * r, start=start, extent=90,
+                            fill=c, outline=c, style="pieslice", tags="cardbg")
+        self.tag_lower("cardbg")
+        inset = r // 2 + 3
+        self.coords(self._win, inset, inset)
+        self.itemconfigure(self._win, width=w - 2 * inset, height=h - 2 * inset)
+
+    def _auto_height(self) -> None:
+        """内容驱动高度（用于固定内容卡片；expand 型卡片不触发明显抖动）。"""
+        req = self.inner.winfo_reqheight() + self.radius + 6
+        if abs(req - self.winfo_height()) > 2:
+            self.configure(height=req)
+
+    def set_ring(self, color: str | None) -> None:
+        """拖拽悬停反馈：画/擦一圈圆角描边。"""
+        self.delete("ring")
+        if not color:
+            return
+        w, h = self.winfo_width(), self.winfo_height()
+        if w < 4 or h < 4:
+            return
+        r = min(self.radius, w // 2, h // 2) - 1
+        self.create_line(r, 1, w - r, 1, fill=color, width=2, tags="ring")
+        self.create_line(r, h - 1, w - r, h - 1, fill=color, width=2, tags="ring")
+        self.create_line(1, r, 1, h - r, fill=color, width=2, tags="ring")
+        self.create_line(w - 1, r, w - 1, h - r, fill=color, width=2, tags="ring")
+        for x, y, start in (
+            (1, 1, 90), (w - 2 * r - 1, 1, 0), (1, h - 2 * r - 1, 180),
+            (w - 2 * r - 1, h - 2 * r - 1, 270)
+        ):
+            self.create_arc(x, y, x + 2 * r, y + 2 * r, start=start, extent=90,
+                            outline=color, width=2, style="arc", tags="ring")
+
+
+class NavItem(tk.Canvas):
+    """侧边栏导航项：单色图标 + 文字，选中/悬停画圆角胶囊底（macOS 侧栏风格）。"""
+
+    def __init__(self, master, icon: str, text: str, command,
+                 pal: dict, font, height: int = 34) -> None:
+        super().__init__(master, height=height, bg=pal["sidebar"],
+                         bd=0, highlightthickness=0, cursor="pointinghand")
+        self.pal = pal
+        self.icon = icon
+        self.text = text
+        self.command = command
+        self.font = font
+        self.selected = False
+        self.hovered = False
+        self.bind("<Configure>", lambda e: self._draw())
+        self.bind("<Enter>", lambda e: self._set_hover(True))
+        self.bind("<Leave>", lambda e: self._set_hover(False))
+        self.bind("<Button-1>", lambda e: self.command())
+
+    def _set_hover(self, v: bool) -> None:
+        self.hovered = v
+        self._draw()
+
+    def set_selected(self, v: bool) -> None:
+        self.selected = v
+        self._draw()
+
+    def _draw(self) -> None:
+        self.delete("all")
+        w, h = self.winfo_width(), self.winfo_height()
+        if w < 4 or h < 4:
+            return
+        if self.selected or self.hovered:
+            c = self.pal["accent"] if self.selected else self.pal["hover"]
+            r = 7
+            x0, y0, x1, y1 = 8, 2, w - 8, h - 2
+            self.create_rectangle(x0 + r, y0, x1 - r, y1, fill=c, outline=c)
+            self.create_rectangle(x0, y0 + r, x1, y1 - r, fill=c, outline=c)
+            for x, y, start in (
+                (x0, y0, 90), (x1 - 2 * r, y0, 0), (x0, y1 - 2 * r, 180),
+                (x1 - 2 * r, y1 - 2 * r, 270)
+            ):
+                self.create_arc(x, y, x + 2 * r, y + 2 * r, start=start,
+                                extent=90, fill=c, outline=c, style="pieslice")
+        fg = "#ffffff" if self.selected else self.pal["text"]
+        if not self.selected and self.hovered:
+            fg = self.pal["text"]
+        self.create_text(20, h // 2, text=self.icon, fill=fg,
+                         font=self.font, anchor="w")
+        self.create_text(40, h // 2, text=self.text, fill=fg,
+                         font=self.font, anchor="w")
+
+
 def _is_dark() -> bool:
     """读 macOS 的界面样式（深色返回 'Dark'，浅色无此键会报错）。"""
     try:
@@ -227,48 +347,30 @@ class App:
         tk.Label(side, text=APP_SUBTITLE, bg=self.pal["sidebar"], fg=self.pal["gray"],
                  font=self.f_sub).pack(anchor="w", padx=18, pady=(0, 18))
 
-        for key, text in (
-            ("convert", "转换"),
-            ("settings", "输出设置"),
-            ("recent", "最近转换"),
-            ("log", "日志"),
-            ("about", "关于"),
+        for key, icon, text in (
+            ("convert", "⇄", "转换"),
+            ("recent", "◷", "最近转换"),
+            ("log", "≡", "日志"),
+            ("about", "ⓘ", "关于"),
         ):
-            self._nav_item(side, text, key)
+            item = NavItem(side, icon, text, lambda k=key: self.show_page(k),
+                           self.pal, self.f_nav)
+            item.pack(fill="x", padx=2, pady=1)
+            self.nav_items[key] = item
 
         self.content = tk.Frame(self.root, bg=self.pal["bg"])
         self.content.pack(side="left", fill="both", expand=True)
 
         self._build_convert()
-        self._build_settings()
         self._build_recent()
         self._build_log()
         self._build_about()
         self.show_page("convert")
 
-    def _nav_item(self, parent: tk.Frame, text: str, key: str) -> None:
-        lbl = tk.Label(
-            parent, text=text, bg=self.pal["sidebar"], fg=self.pal["text"],
-            font=self.f_nav, anchor="w", padx=18, pady=10, cursor="pointinghand",
-        )
-        lbl.pack(fill="x")
-        lbl.bind("<Button-1>", lambda e: self.show_page(key))
-        lbl.bind("<Enter>", lambda e: self._nav_hover(lbl, key, True))
-        lbl.bind("<Leave>", lambda e: self._nav_hover(lbl, key, False))
-        self.nav_items[key] = lbl
-
-    def _nav_hover(self, lbl: tk.Label, key: str, entering: bool) -> None:
-        if self.page == key:
-            return
-        lbl.config(bg=self.pal["hover"] if entering else self.pal["sidebar"])
-
     def show_page(self, key: str) -> None:
         self.page = key
-        for k, lbl in self.nav_items.items():
-            if k == key:
-                lbl.config(bg=self.pal["accent"], fg="#ffffff")
-            else:
-                lbl.config(bg=self.pal["sidebar"], fg=self.pal["text"])
+        for k, item in self.nav_items.items():
+            item.set_selected(k == key)
         for k, frame in self.pages.items():
             if k == key:
                 frame.pack(fill="both", expand=True)
@@ -284,23 +386,16 @@ class App:
     def _build_convert(self) -> None:
         p = self._page("convert")
 
-        self.drop_zone = tk.Frame(
-            p, bg=self.pal["card"], highlightthickness=1,
-            highlightbackground=self.pal["border"], height=150,
-        )
-        self.drop_zone.pack(fill="x", padx=24, pady=(22, 14))
-        self.drop_zone.pack_propagate(False)
-        inner = tk.Frame(self.drop_zone, bg=self.pal["card"])
-        inner.place(relx=0.5, rely=0.5, anchor="center")
-        dz = "把音频拖到这里" if self.dnd_enabled else "添加音频开始"
-        tk.Label(inner, text=dz, bg=self.pal["card"], fg=self.pal["text"],
-                 font=self.f_drop).pack()
-        tk.Label(inner, text="支持 mp3 / wav / flac / ncm / qmc / mflac 等",
-                 bg=self.pal["card"], fg=self.pal["gray"],
-                 font=self.f_sub).pack(pady=(6, 0))
+        # 顶部：设置卡片（原“输出设置”页并入主页）
+        self._build_settings_card(p)
 
-        bar = tk.Frame(p, bg=self.pal["bg"])
-        bar.pack(fill="x", padx=24)
+        # 中部：文件列表卡片
+        list_card = Card(p, self.pal, radius=12, auto_height=False)
+        list_card.pack(fill="both", expand=True, padx=20, pady=(4, 10))
+        inner = list_card.inner
+
+        bar = tk.Frame(inner, bg=self.pal["card"])
+        bar.pack(fill="x", padx=8, pady=(8, 4))
         for txt, cmd, w in (
             ("添加文件", self._add_files, 88),
             ("添加文件夹", self._add_folder, 104),
@@ -308,12 +403,12 @@ class App:
             ("清空", self._clear, 68),
         ):
             FlatButton(bar, text=txt, command=cmd, pal=self.pal, font=self.f_btn,
-                       width=w).pack(side="left", padx=(0, 8))
-        tk.Label(bar, textvariable=self.count_text, bg=self.pal["bg"],
-                 fg=self.pal["gray"], font=self.f_sub).pack(side="right")
+                       width=w, height=28, bg=self.pal["card"]).pack(side="left", padx=(0, 8))
+        tk.Label(bar, textvariable=self.count_text, bg=self.pal["card"],
+                 fg=self.pal["gray"], font=self.f_sub).pack(side="right", padx=4)
 
-        wrap = tk.Frame(p, bg=self.pal["bg"])
-        wrap.pack(fill="both", expand=True, padx=24, pady=(8, 12))
+        wrap = tk.Frame(inner, bg=self.pal["card"])
+        wrap.pack(fill="both", expand=True, padx=8, pady=(0, 8))
         self.tree = ttk.Treeview(
             wrap, columns=("name", "size"), show="headings", height=8
         )
@@ -326,67 +421,79 @@ class App:
         self.tree.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
 
+        # 下部：拖放卡片（slim，圆角，悬停描边反馈）
+        self.drop_zone = Card(p, self.pal, radius=12, height=88, auto_height=False)
+        self.drop_zone.pack(fill="x", padx=20, pady=(0, 10))
+        dz_wrap = tk.Frame(self.drop_zone.inner, bg=self.pal["card"])
+        dz_wrap.place(relx=0.5, rely=0.5, anchor="center")
+        dz = "把音频拖到这里" if self.dnd_enabled else "添加音频开始"
+        tk.Label(dz_wrap, text=dz, bg=self.pal["card"], fg=self.pal["text"],
+                 font=self.f_drop).pack()
+        tk.Label(dz_wrap, text="支持 mp3 / wav / flac / ncm / qmc / mflac 等",
+                 bg=self.pal["card"], fg=self.pal["gray"],
+                 font=self.f_sub).pack(pady=(4, 0))
+
+        # 底部：开始按钮（固定宽度居中，不再整行铺满）+ 进度 + 状态
         bottom = tk.Frame(p, bg=self.pal["bg"])
-        bottom.pack(fill="x", padx=24, pady=(0, 20))
+        bottom.pack(fill="x", padx=20, pady=(0, 16))
         self.start_btn = FlatButton(
             bottom, text="开始转换", command=self._start, pal=self.pal,
-            font=self.f_btn, kind="primary", width=240, height=40, radius=9,
+            font=self.f_btn, kind="primary", width=220, height=36, radius=9,
         )
-        self.start_btn.pack(fill="x")
+        self.start_btn.pack()
         self.prog = ttk.Progressbar(bottom, mode="determinate", maximum=100)
-        self.prog.pack(fill="x", pady=(10, 6))
+        self.prog.pack(fill="x", pady=(10, 4))
         tk.Label(bottom, textvariable=self.status, bg=self.pal["bg"],
                  fg=self.pal["gray"], font=self.f_sub).pack(anchor="w")
 
-    # ---------- 设置页 ----------
-    def _build_settings(self) -> None:
-        p = self._page("settings")
-        form = tk.Frame(p, bg=self.pal["bg"])
-        form.pack(fill="x", padx=24, pady=24)
+    # ---------- 设置卡片（并入转换页顶部） ----------
+    def _ctl_label(self, parent, text: str, pad=(0, 6)) -> None:
+        tk.Label(parent, text=text, bg=self.pal["card"], fg=self.pal["gray"],
+                 font=self.f_sub).pack(side="left", padx=pad)
 
-        def row(label: str, widget_builder, y: int) -> None:
-            tk.Label(form, text=label, bg=self.pal["bg"], fg=self.pal["text"],
-                     font=self.f_nav).grid(row=y, column=0, sticky="w", pady=10)
-            widget_builder().grid(row=y, column=1, sticky="w", padx=14)
+    def _build_settings_card(self, parent) -> None:
+        card = Card(parent, self.pal, radius=12)
+        card.pack(fill="x", padx=20, pady=(14, 4))
+        form = card.inner
 
-        f0 = tk.Frame(form, bg=self.pal["bg"])
-        row("输出目录", lambda: f0, 0)
-        ttk.Entry(f0, textvariable=self.out_dir, width=34).pack(side="left")
-        FlatButton(f0, text="选择…", command=self._choose_out, pal=self.pal,
-                   font=self.f_btn, width=76).pack(side="left", padx=8)
-
-        f_fmt = tk.Frame(form, bg=self.pal["bg"])
-        row("输出格式", lambda: f_fmt, 1)
-        ttk.Combobox(f_fmt, textvariable=self.out_format, width=6,
+        r1 = tk.Frame(form, bg=self.pal["card"])
+        r1.pack(fill="x", padx=10, pady=(10, 2))
+        self._ctl_label(r1, "输出格式")
+        ttk.Combobox(r1, textvariable=self.out_format, width=6,
                      values=["mp4", "mp3", "m4a", "flac", "wav"],
                      state="readonly").pack(side="left")
-        tk.Label(f_fmt, text="mp4＝黑屏视频（传平台）；其余＝纯音频（解密/转码）",
-                 bg=self.pal["bg"], fg=self.pal["gray"],
-                 font=self.f_sub).pack(side="left", padx=10)
-
-        f1 = tk.Frame(form, bg=self.pal["bg"])
-        row("分辨率", lambda: f1, 2)
-        ttk.Entry(f1, textvariable=self.resolution, width=12).pack(side="left")
-        tk.Label(f1, text="帧率", bg=self.pal["bg"], fg=self.pal["text"],
-                 font=self.f_nav).pack(side="left", padx=(16, 6))
-        ttk.Spinbox(f1, from_=1, to=30, textvariable=self.fps, width=5).pack(side="left")
-        tk.Label(f1, text="（静态黑屏用 1 即可）", bg=self.pal["bg"],
-                 fg=self.pal["gray"], font=self.f_sub).pack(side="left", padx=10)
-
-        f2 = tk.Frame(form, bg=self.pal["bg"])
-        row("音频", lambda: f2, 3)
-        ttk.Combobox(f2, textvariable=self.audio_codec, width=8,
+        self._ctl_label(r1, "音频", pad=(14, 6))
+        ttk.Combobox(r1, textvariable=self.audio_codec, width=6,
                      values=["auto", "copy", "aac"], state="readonly").pack(side="left")
-        tk.Label(f2, text="auto＝推荐上传：mp3/aac 原样，其余（flac/ncm 等）自动转 AAC",
-                 bg=self.pal["bg"], fg=self.pal["gray"],
+        self._ctl_label(r1, "输出目录", pad=(14, 6))
+        ttk.Entry(r1, textvariable=self.out_dir, width=18).pack(side="left")
+        FlatButton(r1, text="选择…", command=self._choose_out, pal=self.pal,
+                   font=self.f_btn, width=64, height=26,
+                   bg=self.pal["card"]).pack(side="left", padx=8)
+
+        # 高级行：仅黑屏视频（mp4）模式可见
+        self.adv_row = tk.Frame(form, bg=self.pal["card"])
+        self._ctl_label(self.adv_row, "分辨率")
+        ttk.Entry(self.adv_row, textvariable=self.resolution,
+                  width=10).pack(side="left")
+        self._ctl_label(self.adv_row, "帧率", pad=(14, 6))
+        ttk.Spinbox(self.adv_row, from_=1, to=30, textvariable=self.fps,
+                    width=4).pack(side="left")
+        self._ctl_label(self.adv_row, "质量", pad=(14, 6))
+        ttk.Spinbox(self.adv_row, from_=0, to=51, textvariable=self.crf,
+                    width=4).pack(side="left")
+        tk.Label(self.adv_row, text="仅黑屏视频模式生效（CRF 0–51，18 已近无损）",
+                 bg=self.pal["card"], fg=self.pal["gray"],
                  font=self.f_sub).pack(side="left", padx=10)
 
-        f3 = tk.Frame(form, bg=self.pal["bg"])
-        row("视频质量", lambda: f3, 4)
-        ttk.Spinbox(f3, from_=0, to=51, textvariable=self.crf, width=5).pack(side="left")
-        tk.Label(f3, text="CRF 0–51，越小越清晰越大（黑屏下 18 已近无损）",
-                 bg=self.pal["bg"], fg=self.pal["gray"],
-                 font=self.f_sub).pack(side="left", padx=10)
+        self.out_format.trace_add("write", lambda *_: self._toggle_adv())
+        self._toggle_adv()
+
+    def _toggle_adv(self) -> None:
+        if self.out_format.get() == "mp4":
+            self.adv_row.pack(fill="x", padx=10, pady=(2, 10))
+        else:
+            self.adv_row.pack_forget()
 
     # ---------- 最近转换页 ----------
     def _build_recent(self) -> None:
@@ -470,14 +577,10 @@ class App:
             w.dnd_bind("<<DropLeave>>", self._on_drop_leave)
 
     def _on_drop_enter(self, event) -> None:
-        self.drop_zone.config(
-            highlightbackground=self.pal["accent"], highlightthickness=2
-        )
+        self.drop_zone.set_ring(self.pal["accent"])
 
     def _on_drop_leave(self, event) -> None:
-        self.drop_zone.config(
-            highlightbackground=self.pal["border"], highlightthickness=1
-        )
+        self.drop_zone.set_ring(None)
 
     def _on_drop(self, event) -> None:
         self._on_drop_leave(event)
