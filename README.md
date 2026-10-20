@@ -20,9 +20,15 @@
 
 </div>
 
-## 📸 截图
+## 📸 效果
 
-![GUI 界面（深色模式）](screenshots/gui-dark.png)
+界面（深色模式，v2.03）：
+
+![GUI 界面](screenshots/gui-dark.png)
+
+封面模式产出的成片（`.ncm` 自带封面 + 标签，直接出片）：
+
+![封面模式产出](screenshots/cover-mode.jpg)
 
 ## ✨ 为什么是 KTrans
 
@@ -62,20 +68,38 @@ python3 mp3_to_mp4.py 音乐.mp3
 python3 mp3_to_mp4.py *.ncm *.flac --audio-codec auto
 ```
 
-### 4.（可选）打包成 macOS App
+### 4. 打包成 macOS App
+
+有两个脚本，按需要选：
 
 ```bash
-./build_app.sh
+./build_dist.sh    # 推荐：py2app 全量打包，独立可分发（约 31 MB）
+./build_app.sh     # 轻量：外壳 + 启动脚本，只在本机能跑（秒级）
 ```
 
-产出 `dist/ktrans.app`，双击即可运行，也可拖进「应用程序」文件夹。
+**`build_dist.sh`（独立版）**：把解释器、`tkinterdnd2`、Tcl/Tk 运行时全部塞进 bundle，
+对方机器不用装 Python，双击即用（仍需装 ffmpeg）。产物 `dist/ktrans.app`。
 
-> 脚本会自动探测你机器上带可用 tkinter 的 Python 解释器，并把拖拽库 `tkinterdnd2` 的路径写进启动器。
+```bash
+ditto -c -k --keepParent dist/ktrans.app ktrans.zip   # 压缩后发给别人
+```
 
-⚠️ 这是「外壳 + 启动脚本」结构的**本机自用版**，启动器里记录的是你本机的 Python 路径，换台机器要重新跑一次 `build_app.sh`。想发给别人直接用，请等 py2app 全量打包版本（见 Roadmap）。
+首次构建需要准备环境（已 `.gitignore`，不会进仓库）：
 
-- 排障：双击没反应时看日志 `/tmp/ktrans.log`
-- 已知限制：v1 不支持"把文件拖到 Dock 图标上打开"（脚本型 `.app` 收不到系统的 odoc 事件），请在窗口内拖放
+```bash
+python3 -m venv .venv-pack
+.venv-pack/bin/pip install py2app tkinterdnd2
+```
+
+> 构建脚本替你处理了三件 py2app 自己搞不定的事：把 Tcl/Tk 的 dylib 放进 `Resources/lib`
+> 命中 `_tkinter.so` 自带的 rpath；拷贝 `tcl9.0` / `tk9.0` 脚本库；改完文件后重新 ad-hoc 签名。
+
+**`build_app.sh`（轻量版）**：只生成外壳 + 启动脚本，启动器里记录本机 Python 路径，
+换台机器要重跑一次。
+
+- 排障：双击没反应 / 闪退时看日志 `/tmp/ktrans.log`
+- 拖文件到 Dock 图标 / 访达「打开方式」：**App 已在运行时可用**；冷启动直接带文件不生效
+  （macOS 的 odoc 事件在 Tk 9 里没有内置支持，事件在 Python 起来前就被丢了）
 
 ## 🖱️ 使用
 
@@ -138,8 +162,8 @@ python3 mp3_to_mp4.py 夜曲.mp3 --video cover -r 1920x1080
 
 ## 🗺️ Roadmap
 
-- [ ] py2app 独立打包（免 Python 环境，可直接分发给别人）
-- [ ] 拖文件到 Dock 图标即可打开（依赖上面那项）
+- [x] py2app 独立打包（`build_dist.sh`，免 Python 环境，可直接分发给别人）
+- [x] 拖文件到 Dock 图标（App 运行中可用，见上方限制说明）
 - [ ] 自定义 App 图标
 - [ ] Windows 版
 

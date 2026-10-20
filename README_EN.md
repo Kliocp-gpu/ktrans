@@ -20,9 +20,15 @@ And it decodes NetEase Cloud Music's `.ncm` private format along the way.
 
 </div>
 
-## 📸 Screenshot
+## 📸 Screenshots
 
-![GUI (dark mode)](screenshots/gui-dark.png)
+The app (dark mode, v2.03):
+
+![GUI](screenshots/gui-dark.png)
+
+Output produced by cover mode (an `.ncm` with embedded art + tags, straight to video):
+
+![Cover mode output](screenshots/cover-mode.jpg)
 
 ## ✨ Why KTrans
 
@@ -61,20 +67,40 @@ python3 mp3_to_mp4.py music.mp3
 python3 mp3_to_mp4.py *.ncm *.flac --audio-codec auto
 ```
 
-### 4. (Optional) Build a macOS app bundle
+### 4. Build a macOS app bundle
+
+Two scripts — pick one:
 
 ```bash
-./build_app.sh
+./build_dist.sh    # recommended: full py2app bundle, standalone & distributable (~31 MB)
+./build_app.sh     # lightweight: shell + launcher script, this machine only (seconds)
 ```
 
-This produces `dist/ktrans.app` — double-click to run, or drag it into Applications.
+**`build_dist.sh` (standalone)**: bundles the interpreter, `tkinterdnd2` and the Tcl/Tk runtime
+inside the app, so the other machine needs no Python at all — just double-click (ffmpeg still required).
+Output: `dist/ktrans.app`.
 
-> The script auto-detects a Python interpreter with a working tkinter, and bakes the `tkinterdnd2` (drag & drop) path into the launcher.
+```bash
+ditto -c -k --keepParent dist/ktrans.app ktrans.zip   # zip it up to share
+```
 
-⚠️ This is a **local-use-only** bundle (shell + launcher script) that hardcodes your machine's Python paths — run `build_app.sh` again on any other machine. For a distributable build, wait for the py2app version (see Roadmap).
+One-time build environment (already `.gitignore`d):
 
-- Troubleshooting: check `/tmp/ktrans.log` if double-click does nothing
-- Known limitation: v1 does not support "drop a file onto the Dock icon" (script-based `.app` bundles don't receive the system's odoc event) — drop files into the window instead
+```bash
+python3 -m venv .venv-pack
+.venv-pack/bin/pip install py2app tkinterdnd2
+```
+
+> The script does three things py2app can't on this Python build: place the Tcl/Tk dylibs in
+> `Resources/lib` so `_tkinter.so`'s built-in rpath resolves; copy the `tcl9.0` / `tk9.0` script
+> libraries; and re-run an ad-hoc codesign after touching the binaries.
+
+**`build_app.sh` (lightweight)**: shell + launcher script only, hardcoding your machine's Python paths.
+
+- Troubleshooting: check `/tmp/ktrans.log` if double-click does nothing or it crashes
+- Drop a file onto the Dock icon / Finder "Open With": **works while the app is already running**;
+  a cold start that carries a file does not load it (macOS odoc events have no built-in support
+  in Tk 9 — the event is dropped before Python starts)
 
 ## 🖱️ Usage
 
@@ -139,8 +165,8 @@ Audio-only outputs (`--format mp3/m4a/flac/wav`) are supported as well.
 
 ## 🗺️ Roadmap
 
-- [ ] Standalone py2app bundle (no Python environment needed, distributable)
-- [ ] Drop files onto the Dock icon (depends on the item above)
+- [x] Standalone py2app bundle (`build_dist.sh`, no Python environment needed, distributable)
+- [x] Drop files onto the Dock icon (works while the app is running — see the note above)
 - [ ] Custom app icon
 - [ ] Windows support
 

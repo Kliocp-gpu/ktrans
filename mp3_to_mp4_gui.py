@@ -13,11 +13,13 @@ macOS 说明：Aqua 主题会接管 ttk 控件的 padding/背景/悬停态，sty
 """
 
 import concurrent.futures
+import glob
 import os
 import queue
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 import tkinter.font as tkfont
 import urllib.parse
@@ -287,8 +289,161 @@ def _human_size(n: int) -> str:
     return f"{n:.1f} GB"
 
 
+class OdocWatcher:
+    """接管 macOS 的「打开文档」AppleEvent（odoc），用于 Dock 拖放 / 访达「打开方式」。
+
+    为什么不用 Tk 的 `::tk::mac::OpenDocuments`：**Tk 9.0 这个构建里根本没有该命令**
+    （`info commands ::tk::mac::*` 只有 DoScriptFile / macOSVersion 等几个），
+    Tk 8.6 时代的那套 odoc 集成在这版 Tk 里不存在。所以直接用 ctypes 调 Carbon 的
+    AppleEvent API，自己收事件——思路与 py2app 的 argv_emulation 相同，
+    区别是这里常驻，App 已经在跑时再拖文件也能收到。
+
+    用法：install() 挂处理器 → Tk 里每 200ms 调一次 pump() 处理积压事件。
+    """
+
+    kCoreEventClass = 0x61657674         # 'aevt'
+    kAEOpenDocuments = 0x6F646F63        # 'odoc'
+    keyDirectObject = 0x2D2D2D2D         # '----'
+    typeAEList = 0x6C697374              # 'list'
+    typeFSRef = 0x66737266               # 'fsrf'
+    typeChar = 0x54455854                # 'TEXT'
+    kEventClassAppleEvent = 0x65707063   # 'eppc'
+    kEventAppleEvent = 1
+
+    def __init__(self, callback) -> None:
+        self.callback = callback
+        self.ok = False
+        self._carbon = None
+        self._handler = None
+
+    # ---- 安装 ----
+    def install(self) -> bool:
+        if sys.platform != "darwin" or self.ok:
+            return self.ok
+        try:
+            import ctypes
+
+            class AEDesc(ctypes.Structure):
+                _fields_ = [("descKey", ctypes.c_int),
+                            ("descContent", ctypes.c_void_p)]
+
+            class EventTypeSpec(ctypes.Structure):
+                _fields_ = [("eventClass", ctypes.c_int),
+                            ("eventKind", ctypes.c_uint)]
+
+            self.ctypes = ctypes
+            self.AEDesc = AEDesc
+            self.EventTypeSpec = EventTypeSpec
+
+            carbon = ctypes.CDLL(
+                "/System/Library/Frameworks/Carbon.framework/Carbon")
+            self._callback_t = ctypes.CFUNCTYPE(
+                ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+            carbon.AEInstallEventHandler.argtypes = [
+                ctypes.c_int, ctypes.c_int, self._callback_t,
+                ctypes.c_void_p, ctypes.c_char]
+            carbon.AEProcessEvent.restype = ctypes.c_int
+            carbon.AEProcessEvent.argtypes = [ctypes.c_void_p]
+            carbon.ReceiveNextEvent.restype = ctypes.c_int
+            carbon.ReceiveNextEvent.argtypes = [
+                ctypes.c_long, ctypes.POINTER(EventTypeSpec), ctypes.c_double,
+                ctypes.c_char, ctypes.POINTER(ctypes.c_void_p)]
+            carbon.AEGetParamDesc.restype = ctypes.c_int
+            carbon.AEGetParamDesc.argtypes = [
+                ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+                ctypes.POINTER(AEDesc)]
+            carbon.AECountItems.restype = ctypes.c_int
+            carbon.AECountItems.argtypes = [
+                ctypes.POINTER(AEDesc), ctypes.POINTER(ctypes.c_long)]
+            carbon.AEGetNthDesc.restype = ctypes.c_int
+            carbon.AEGetNthDesc.argtypes = [
+                ctypes.c_void_p, ctypes.c_long, ctypes.c_int,
+                ctypes.c_void_p, ctypes.c_void_p]
+            carbon.AEGetDescDataSize.restype = ctypes.c_int
+            carbon.AEGetDescDataSize.argtypes = [ctypes.POINTER(AEDesc)]
+            carbon.AEGetDescData.restype = ctypes.c_int
+            carbon.AEGetDescData.argtypes = [
+                ctypes.POINTER(AEDesc), ctypes.c_void_p, ctypes.c_int]
+            carbon.FSRefMakePath.restype = ctypes.c_int
+            carbon.FSRefMakePath.argtypes = [
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint]
+
+            self._carbon = carbon
+            self._handler = self._callback_t(self._on_ae)
+            carbon.AEInstallEventHandler(
+                self.kCoreEventClass, self.kAEOpenDocuments,
+                self._handler, 0, b"\0")
+            self.ok = True
+        except Exception:
+            self.ok = False
+        return self.ok
+
+    # ---- AE 回调 ----
+    def _on_ae(self, message, reply, refcon):
+        ctypes = self.ctypes
+        paths: list[str] = []
+        try:
+            desc = self.AEDesc()
+            if self._carbon.AEGetParamDesc(
+                    message, self.keyDirectObject, self.typeAEList,
+                    ctypes.byref(desc)) == 0:
+                count = ctypes.c_long()
+                if self._carbon.AECountItems(ctypes.byref(desc),
+                                             ctypes.byref(count)) == 0:
+                    for i in range(count.value):
+                        item = self.AEDesc()
+                        # 先按 FSRef 取，失败再按 TEXT 取（不同来源类型不同）
+                        for typ in (self.typeFSRef, self.typeChar):
+                            if self._carbon.AEGetNthDesc(
+                                    ctypes.byref(desc), i + 1, typ, 0,
+                                    ctypes.byref(item)) != 0:
+                                continue
+                            size = self._carbon.AEGetDescDataSize(
+                                ctypes.byref(item))
+                            if size <= 0:
+                                continue
+                            buf = ctypes.create_string_buffer(size)
+                            if self._carbon.AEGetDescData(
+                                    ctypes.byref(item), buf, size) != 0:
+                                continue
+                            if typ == self.typeFSRef:
+                                pbuf = ctypes.create_string_buffer(1024)
+                                if self._carbon.FSRefMakePath(
+                                        ctypes.byref(buf), pbuf, 1023) == 0:
+                                    paths.append(pbuf.value.decode("utf-8"))
+                            else:
+                                paths.append(buf.value.decode("utf-8"))
+                            break
+        except Exception:
+            pass
+        if paths:
+            try:
+                self.callback(paths)
+            except Exception:
+                pass
+        return 0
+
+    # ---- 事件泵 ----
+    def pump(self) -> None:
+        if not self.ok:
+            return
+        ctypes = self.ctypes
+        spec = self.EventTypeSpec(self.kEventClassAppleEvent,
+                                  self.kEventAppleEvent)
+        while True:
+            evt = ctypes.c_void_p()
+            st = self._carbon.ReceiveNextEvent(
+                1, ctypes.byref(spec), 0.0, b"\1", ctypes.byref(evt))
+            if st != 0:      # 没事件了（-9875 超时）或出错
+                break
+            if self._carbon.AEProcessEvent(evt) != 0:
+                break
+
+
 class App:
-    def __init__(self, root: tk.Tk, dnd_enabled: bool = False) -> None:
+    def __init__(self, root: tk.Tk, dnd_enabled: bool = False,
+                 odoc: "OdocWatcher | None" = None,
+                 pending: list[str] | None = None) -> None:
         self.root = root
         self.dnd_enabled = dnd_enabled
         self.pal = DARK if _is_dark() else LIGHT
@@ -321,11 +476,21 @@ class App:
         if dnd_enabled:
             self._enable_dnd()
         if sys.platform == "darwin":
-            try:
-                # 封装成 .app 后，把音频拖到 Dock 图标 / 访达“打开方式”会触发 odoc 事件
-                self.root.createcommand("::tk::mac::OpenDocument", self._on_open_document)
-            except Exception:
-                pass
+            # 封装成 .app 后，把音频拖到 Dock 图标 / 访达“打开方式”会触发 odoc 事件。
+            # Tk 9 里没有 ::tk::mac::OpenDocuments（Tk 8.6 才有），改用自己挂的
+            # Carbon AppleEvent 处理器，详见 OdocWatcher 的注释。
+            # odoc 可能在 main() 里更早就装好了（抢冷启动事件），这里接管回调即可。
+            self.odoc = odoc or OdocWatcher(self._on_open_document)
+            self.odoc.callback = self._on_open_document
+            self.odoc.install()
+            if pending:
+                self._on_open_document(pending)
+            self.odoc.pump()
+            extra = [a for a in sys.argv[1:]
+                     if a.lower().endswith(AUDIO_EXTS) and os.path.isfile(a)]
+            if extra:
+                self._on_open_document(extra)
+            self.root.after(300, self._pump_odoc)
         self.root.after(100, self._poll_log)
 
     # ---------- 字体 ----------
@@ -673,7 +838,22 @@ class App:
         before = len(self.files)
         self._append_files(files)
         self.show_page("convert")
+        # 从 Dock 图标打开时窗口可能在后面，主动提到前台，否则用户以为没反应
+        try:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.focus_force()
+        except Exception:
+            pass
         self._log(f"[打开] 已加入 {len(self.files) - before} 个文件")
+
+    def _pump_odoc(self) -> None:
+        """周期性处理 AppleEvent 队列：odoc 事件在这一步被取出并变成加文件。"""
+        try:
+            self.odoc.pump()
+        except Exception:
+            pass
+        self.root.after(300, self._pump_odoc)
 
     def _add_files(self) -> None:
         paths = filedialog.askopenfilenames(
@@ -844,7 +1024,32 @@ class App:
         self.root.after(100, self._poll_log)
 
 
+def _setup_frozen() -> None:
+    """py2app 独立包里的启动准备：定位 Tcl/Tk 脚本库 + 把输出重定向到日志。
+
+    独立包没有终端，出错时窗口直接闪退、什么都看不到；统一写 /tmp/ktrans.log 便于排查。
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    try:
+        f = open("/tmp/ktrans.log", "a", buffering=1, encoding="utf-8")
+        sys.stdout = sys.stderr = f
+        print(f"\n==== {time.strftime('%Y-%m-%d %H:%M:%S')} 启动 ktrans（独立包）====")
+    except Exception:
+        pass
+
+    # Tcl/Tk 的 .tcl 脚本库在 Contents/Resources/tcl9.0、tk9.0 下，
+    # 不告诉 Tk 位置它会报 "Cannot find a usable init.tcl"。
+    contents = os.path.dirname(os.path.dirname(os.path.abspath(sys.executable)))
+    res = os.path.join(contents, "Resources")
+    for env, prefix in (("TCL_LIBRARY", "tcl"), ("TK_LIBRARY", "tk")):
+        for cand in sorted(glob.glob(os.path.join(res, f"{prefix}[0-9]*"))):
+            os.environ.setdefault(env, cand)
+            break
+
+
 def main() -> None:
+    _setup_frozen()
     dnd = False
     try:
         from tkinterdnd2 import TkinterDnD
