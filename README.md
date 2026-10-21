@@ -16,7 +16,7 @@
 ---
 
 把音乐变成平台要的视频 —— 专为那些"只收视频"的上传平台而生（抖音 / B站 / 视频号…）。
-两种画面随你挑：**真·纯黑屏**（体积最小、压制最友好），或者**专辑封面 + 模糊背景 + 歌名**
+两种画面可选：**真·纯黑屏**（体积最小、压制最友好），或者**专辑封面 + 模糊背景 + 歌名**
 （看着像个正经作品）。不想出视频也行，直接导出 mp3 / m4a / flac / wav。
 
 网易云 `.ncm` 与 QQ 音乐 `.qmc / .mflac / .mgg` 全部内置解密，加密文件拖进来就是能用的成品。
@@ -94,7 +94,7 @@ python3 -m venv .venv-pack
 .venv-pack/bin/pip install py2app tkinterdnd2
 ```
 
-> 构建脚本替你处理了三件 py2app 自己搞不定的事：把 Tcl/Tk 的 dylib 放进 `Resources/lib`
+> 构建脚本自动处理三件 py2app 自己搞不定的事：把 Tcl/Tk 的 dylib 放进 `Resources/lib`
 > 命中 `_tkinter.so` 自带的 rpath；拷贝 `tcl9.0` / `tk9.0` 脚本库；改完文件后重新 ad-hoc 签名。
 
 **`build_app.sh`（轻量版）**：只生成外壳 + 启动脚本，启动器里记录本机 Python 路径，
@@ -159,8 +159,10 @@ python3 mp3_to_mp4.py 夜曲.mp3 --video cover -r 1920x1080
 
 ## ⚠️ 声明
 
-- 私有格式解密功能（`.ncm` / `.qmc*` / `.mflac*` / `.mgg*` 等）仅用于**转换你自己合法获取的音频文件**的本地格式，请勿用于绕过版权保护传播作品。支持下正版 🎵
+- 私有格式解密功能（`.ncm` / `.qmc*` / `.mflac*` / `.mgg*` 等）仅用于**转换本人合法获取的音频文件**的本地格式，请勿用于绕过版权保护传播作品。支持下正版 🎵
 - QMC 解密算法移植自 [unlock-music](https://git.unlock-music.dev/um/cli)（MIT License），感谢原作者。
+- NCM 解密依据公开格式资料实现（ncmdump / DeNCM 等开源项目采用同一套流程），代码为自写。
+- 界面布局参考 [Filee](https://github.com/KnifeLemon/Filee)（MIT License）。
 - 本项目与网易云音乐、腾讯音乐官方无关。
 
 ## 🗺️ Roadmap

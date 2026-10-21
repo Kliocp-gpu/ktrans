@@ -57,7 +57,7 @@ done
 # 1. py2app 主流程
 #    两个目录都放到项目外的临时位置，原因有二：
 #      a) build/、dist/ 每次重建都要删几十上百个文件，会被沙箱的批量删除保护拦下；
-#      b) 产物先落在 stage 目录，打包没成功时不会把你正在用的 dist/ktrans.app 弄没。
+#      b) 产物先落在 stage 目录，打包失败时不会波及 dist/ktrans.app 现有副本。
 STAGE="${STAGE:-/tmp/ktrans-dist-$(date +%s)}"
 if [ -e "$APP" ]; then
   mv "$APP" "/tmp/ktrans-app-prev-$(date +%s)"   # 移走而不是删掉，绕开批量删除保护

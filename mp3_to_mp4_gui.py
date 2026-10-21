@@ -843,7 +843,7 @@ class App:
         before = len(self.files)
         self._append_files(files)
         self.show_page("convert")
-        # 从 Dock 图标打开时窗口可能在后面，主动提到前台，否则用户以为没反应
+        # 从 Dock 图标打开时窗口可能不在最前，主动置顶，避免看起来毫无反应
         try:
             self.root.deiconify()
             self.root.lift()
