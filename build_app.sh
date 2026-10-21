@@ -8,7 +8,7 @@
 set -e
 cd "$(dirname "$0")"
 
-VERSION="2.03"
+VERSION="2.10"
 APP="dist/ktrans.app"
 
 rm -rf "$APP"

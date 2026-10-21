@@ -34,7 +34,7 @@ from mp3_to_mp4 import convert_one, default_output, find_ffmpeg, unique_output
 
 APP_NAME = "ktrans"
 APP_SUBTITLE = "音乐格式转换器"
-VERSION = "2.03"
+VERSION = "2.10"
 
 AUDIO_EXTS = (
     ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus",
