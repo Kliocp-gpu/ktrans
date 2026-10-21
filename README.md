@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/ktrans-icon-512.png" width="128" alt="KTrans 图标">
+
 # 🎵 KTrans
 
 **拖进来，转出去。加密音乐、MP3 / FLAC / WAV → 黑屏视频、封面视频、纯音频，一个软件搞定。**

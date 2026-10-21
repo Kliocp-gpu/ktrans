@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/ktrans-icon-512.png" width="128" alt="KTrans icon">
+
 # 🎵 KTrans
 
 **Drag. Drop. Converted.** Encrypted music, MP3 / FLAC / WAV → black-screen video, cover video, or plain audio — one app.

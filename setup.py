@@ -42,7 +42,7 @@ OPTIONS = {
         "numpy", "scipy", "PIL", "matplotlib", "pandas",
         "pytest", "setuptools", "pkg_resources", "pip",
     ],
-    "iconfile": "screenshots/ktrans.icns" if os.path.exists("screenshots/ktrans.icns") else None,
+    "iconfile": "assets/ktrans.icns" if os.path.exists("assets/ktrans.icns") else None,
     "plist": {
         "CFBundleName": APP_NAME,
         "CFBundleDisplayName": APP_NAME,
