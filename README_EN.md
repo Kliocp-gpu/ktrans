@@ -166,9 +166,14 @@ Audio-only outputs (`--format mp3/m4a/flac/wav`) are supported as well.
 
 - The private-format decryption (`.ncm` / `.qmc*` / `.mflac*` / `.mgg*` etc.) is intended **only for converting audio files you legally own** to local formats. Do not use it to circumvent copyright protection or distribute copyrighted works. Support the artists 🎵
 - The QMC decryption algorithm is ported from [unlock-music](https://git.unlock-music.dev/um/cli) (MIT License) — thanks to the original authors.
-- The NCM decryption follows the publicly documented format (the same process ncmdump / DeNCM implement); the code is written from scratch.
 - UI layout inspired by [Filee](https://github.com/KnifeLemon/Filee) (MIT License).
 - This project is not affiliated with NetEase Cloud Music or Tencent Music.
+
+## 🙏 Acknowledgements
+
+- [unlock-music](https://git.unlock-music.dev/um/cli) (MIT License) — the source of the QMC decryption algorithm, verified byte-for-byte against upstream test vectors.
+- [ncmdump](https://github.com/taurusxin/ncmdump) (MIT License) — public reference for the NCM format.
+- [Filee](https://github.com/KnifeLemon/Filee) (MIT License) — inspiration for the UI layout and visual style.
 
 ## 🗺️ Roadmap
 

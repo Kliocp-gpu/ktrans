@@ -161,9 +161,14 @@ python3 mp3_to_mp4.py 夜曲.mp3 --video cover -r 1920x1080
 
 - 私有格式解密功能（`.ncm` / `.qmc*` / `.mflac*` / `.mgg*` 等）仅用于**转换本人合法获取的音频文件**的本地格式，请勿用于绕过版权保护传播作品。支持下正版 🎵
 - QMC 解密算法移植自 [unlock-music](https://git.unlock-music.dev/um/cli)（MIT License），感谢原作者。
-- NCM 解密依据公开格式资料实现（ncmdump / DeNCM 等开源项目采用同一套流程），代码为自写。
 - 界面布局参考 [Filee](https://github.com/KnifeLemon/Filee)（MIT License）。
 - 本项目与网易云音乐、腾讯音乐官方无关。
+
+## 🙏 致谢
+
+- [unlock-music](https://git.unlock-music.dev/um/cli)（MIT License）—— QMC 解密算法的来源，移植时用上游的测试向量做了逐字节比对验证。
+- [ncmdump](https://github.com/taurusxin/ncmdump)（MIT License）—— NCM 格式的公开资料参考。
+- [Filee](https://github.com/KnifeLemon/Filee)（MIT License）—— 界面布局与视觉风格参考。
 
 ## 🗺️ Roadmap
 
