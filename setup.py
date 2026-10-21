@@ -14,7 +14,7 @@ import plistlib
 from setuptools import setup
 
 APP_NAME = "ktrans"
-VERSION = "2.10"
+VERSION = "2.11"
 
 # 让 Finder / 拖到 Dock 图标 / “打开方式” 都能把音频交给 App（odoc 事件）
 DOC_TYPES = [
