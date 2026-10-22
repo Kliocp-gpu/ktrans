@@ -525,7 +525,7 @@ def build_visual_command(
             f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
             f"crop={width}:{height},gblur=sigma={blur},"
             "eq=brightness=-0.30:saturation=1.1[bg];"
-            f"[1:a]showwaves=s={wave_w}x{wave_h}:mode=cline:draw=full:rate={fps}"
+            f"[1:a]showwaves=s={wave_w}x{wave_h}:mode=cline:draw=full:scale=cbrt:rate={fps}"
             f":colors={WAVE_COLOR}[wv];"
             f"[bg][wv]overlay=(W-w)/2:(H-h)/2"
         )
@@ -536,7 +536,7 @@ def build_visual_command(
         cmd += ["-i", audio_path, "-f", "lavfi", "-i", color]
         amap = "0:a"
         graph = (
-            f"[0:a]showwaves=s={wave_w}x{wave_h}:mode=cline:draw=full:rate={fps}"
+            f"[0:a]showwaves=s={wave_w}x{wave_h}:mode=cline:draw=full:scale=cbrt:rate={fps}"
             f":colors={WAVE_COLOR}[wv];"
             f"[1:v][wv]overlay=(W-w)/2:(H-h)/2"
         )
