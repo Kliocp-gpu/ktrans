@@ -8,7 +8,7 @@
 
 *拖进来，转出去。*
 
-[![Version](https://img.shields.io/badge/version-2.12-blue)](../../releases)
+[![Version](https://img.shields.io/badge/version-2.13-blue)](../../releases)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)]()
 [![Python](https://img.shields.io/badge/python-3.11+-yellow)]()
@@ -29,7 +29,7 @@ get something usable out.
 
 ## 📸 Screenshots
 
-The app (dark mode, v2.12):
+The app (dark mode, v2.13):
 
 ![GUI](screenshots/gui-dark.png)
 

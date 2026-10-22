@@ -35,7 +35,7 @@ from mp3_to_mp4 import (AUDIO_EXTS, cancel_all, convert_one, default_output,
 
 APP_NAME = "ktrans"
 APP_SUBTITLE = "音乐格式转换器"
-VERSION = "2.12"
+VERSION = "2.13"
 
 # 苹果系统配色（浅色 / 深色两套）
 LIGHT = {

@@ -4,10 +4,19 @@ ncm_decoder.py — 网易云音乐 .ncm 私有格式解码器（纯标准库，�
 
 原理（公开且长期稳定的算法）:
   1. 头部 8 字节魔数 "CTENFDAM"，随后是 version(2) + key_len(4) + 加密密钥 + meta_len(4)
-     + 加密元数据 + 保留(5) + image_space(4) + image_size(4) + 封面 + 加密音频。
+     + 加密元数据 + CRC(4) + 保留(1) + cover_frame_len(4) + image_len(4)
+     + 封面帧（占 cover_frame_len 字节）+ 加密音频。
   2. 密钥数据: 逐字节 XOR 0x64 -> AES-128-ECB 用 CORE_KEY 解密 -> 去 PKCS7 填充 ->
      去掉前缀 "neteasecloudmusic"(17字节) = 真正的 RC4 密钥。
-  3. 音频数据: 用该密钥做 RC4 变体(keystream 长度 256)逐字节异或还原。
+  3. 元数据: 逐字节 XOR 0x63 -> 前缀 "163 key(Don't modify):" -> base64 ->
+     AES-128-ECB 用 META_KEY 解密 -> 去 "music:" 前缀 = JSON。
+  4. 音频数据: 用该密钥做 RC4 变体(keystream 长度 256)逐字节异或还原。
+
+两个容易踩的点（都会导致"解出来是乱码"）:
+  * 封面帧长度 cover_frame_len 是**整帧**占用，不等于 image_len（实际图片字节数）。
+    2025 年后下载的文件常见 image_len = 0、帧内留有 7~8 KB 填充；只按 image_len
+    跳会落在填充里，把填充当成音频开头。
+  * RC4 变体的第一个音频字节用的是 K[1] 而不是 K[0]。
 还原后的字节就是原始音频(fLaC/ID3/RIFF/OggS...)，交给 ffmpeg 即可。
 
 仅用于个人学习/把已购买的音乐本地备份，请遵守版权。
@@ -225,23 +234,84 @@ def _detect_ext(audio: bytes) -> str:
     return ".mp3"  # ffmpeg 仍能按内容探测
 
 
-def parse_meta(meta_raw: bytes) -> dict:
-    """解析 NCM 元数据块 → dict（含 musicName / artist / album / albumPic ...）。
+_AUDIO_MAGICS = (b"fLaC", b"OggS", b"RIFF")
 
-    结构：明文前缀 b"163 key(Don't modify):" + base64(AES-128-ECB(META_KEY, JSON))，
-    解密后还要去掉 b"music:" 前缀。任何一步不符就返回空 dict（不影响音频解码）。
+
+def _looks_like_audio(head: bytes) -> bool:
+    """head 取 8 字节，判断是否命中常见音频容器的文件头。"""
+    if len(head) < 8:
+        return False
+    if head[:4] in _AUDIO_MAGICS:
+        return True
+    if head[:3] == b"ID3":
+        return True
+    if head[:4] == b"Opus" or head[4:8] == b"Opus":
+        return True
+    if head[4:8] in (b"ftyp", b"Ftyp"):
+        return True
+    # MP3 帧头：11 位同步 + 合法版本/层/码率/采样率，避免随机字节误判
+    if head[0] == 0xFF and (head[1] & 0xE0) == 0xE0:
+        ver, layer = (head[1] >> 3) & 0x03, (head[1] >> 1) & 0x03
+        br, sr = head[2] >> 4, (head[2] >> 2) & 0x03
+        return ver != 1 and layer != 0 and br not in (0, 15) and sr != 3
+    return False
+
+
+def _peek(data: bytes, start: int, phase: int, k: bytes, n: int = 8) -> bytes:
+    seg = data[start:start + n]
+    return bytes(b ^ k[(i + phase) & 0xff] for i, b in enumerate(seg))
+
+
+def _locate_audio(data: bytes, candidates, k: bytes):
+    """在若干结构上说得通的候选起点里，挑出真正能解出音频头的那个。
+
+    封面帧长度的计量方式在不同版本里差几个字节（是否含两个长度字段），
+    所以同时试几个候选位置。返回 (位置, keystream 相位)，失败返回 (None, None)。
     """
-    if not meta_raw or not meta_raw.startswith(META_PREFIX):
+    for pos in candidates:
+        if pos < 0 or pos + 8 > len(data):
+            continue
+        # 相位 1 是规范用法（i 先自增），0 只是兜底
+        for ph in (1, 0):
+            if _looks_like_audio(_peek(data, pos, ph, k)):
+                return pos, ph
+    return None, None
+
+
+def _decrypt_stream(enc: bytes, k: bytes, phase: int) -> bytes:
+    """用 256 字节循环密钥流异或整段音频（大整数异或，比逐字节快一个量级）。"""
+    if not enc:
+        return b""
+    stream = k[phase:] + k[:phase]
+    n = len(enc)
+    ks = (stream * (n // 256 + 1))[:n]
+    return (int.from_bytes(enc, "big") ^ int.from_bytes(ks, "big")).to_bytes(n, "big")
+
+
+def parse_meta(meta_raw: bytes) -> dict:
+    """解析 NCM 元数据块 → dict（含 musicName / artist / album ...）。
+
+    结构：逐字节 XOR 0x63 → 明文前缀 b"163 key(Don't modify):" +
+    base64(AES-128-ECB(META_KEY, JSON))，解密后还要去掉 b"music:" 前缀。
+    任何一步不符就返回空 dict（不影响音频解码）。
+    """
+    if not meta_raw:
         return {}
-    try:
-        enc = base64.b64decode(meta_raw[len(META_PREFIX):])
-        dec = pkcs7_unpad(aes_ecb(enc, META_KEY, encrypt=False))
-        if dec[:6] == b"music:":
-            dec = dec[6:]
-        obj = json.loads(dec.decode("utf-8", "ignore"))
-        return obj if isinstance(obj, dict) else {}
-    except Exception:
-        return {}
+    # 主流文件整体 XOR 0x63；少数早期文件不加密，两种都试一遍
+    for block in (bytes(b ^ 0x63 for b in meta_raw), meta_raw):
+        if not block.startswith(META_PREFIX):
+            continue
+        try:
+            enc = base64.b64decode(block[len(META_PREFIX):])
+            dec = pkcs7_unpad(aes_ecb(enc, META_KEY, encrypt=False))
+            if dec[:6] == b"music:":
+                dec = dec[6:]
+            obj = json.loads(dec.decode("utf-8", "ignore"))
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            continue
+    return {}
 
 
 def meta_summary(meta: dict) -> tuple[str, str, str]:
@@ -274,11 +344,23 @@ def decode_ncm_ex(path: str) -> tuple[str, dict, bytes]:
     meta_len = struct.unpack("<I", data[off:off+4])[0]; off += 4
     meta_raw = data[off:off+meta_len]; off += meta_len
     meta = parse_meta(meta_raw)
-    off += 5  # 保留字段
-    off += 4  # image_space
-    image_size = struct.unpack("<I", data[off:off+4])[0]; off += 4
-    cover = data[off:off+image_size]; off += image_size
-    audio_enc = data[off:]
+
+    off += 5  # CRC(4) + 保留(1)
+    cover_space = struct.unpack("<I", data[off:off+4])[0]; off += 4  # 封面帧总长
+    image_size = struct.unpack("<I", data[off:off+4])[0]; off += 4   # 实际图片长度
+    base = off
+    # 封面帧占 cover_space 字节（image_size 只是其中真正属于图片的部分，
+    # 2025 年后不少文件 image_size = 0、整帧都是填充），必须按帧长跳过。
+    if not (0 < cover_space <= len(data) - base):
+        cover_space = image_size
+    cover = data[base:base+min(image_size, cover_space)]
+    # 帧长的计量起点各版本略有差异，候选位置交给 _locate_audio 用音频魔数裁决
+    candidates = []
+    for c in (base + cover_space, base + image_size, base,
+              base + cover_space - 4, base + cover_space + 4,
+              base + cover_space - image_size):
+        if c not in candidates:
+            candidates.append(c)
 
     xored = bytes(b ^ 0x64 for b in key_data)
     dec = pkcs7_unpad(aes_ecb(xored, CORE_KEY, encrypt=False))
@@ -287,10 +369,10 @@ def decode_ncm_ex(path: str) -> tuple[str, dict, bytes]:
     real_key = dec[17:]
 
     k = rc4_keystream(real_key)
-    # 关键下标：NCM 的 RC4 变体里，第一个音频字节用的是 K[1] 而不是 K[0]
-    # （开源实现均为 i 先自增再用 / j 从 1 开始）。写成 k[i & 0xff] 会整体错位一位，
-    # 解出来是乱码：ffmpeg 会探到 12000Hz、24kb/s、时长 1h47m 这类明显不对的头。
-    audio = bytes(a ^ k[(i + 1) & 0xff] for i, a in enumerate(audio_enc))
+    pos, phase = _locate_audio(data, candidates, k)
+    if pos is None:
+        raise ValueError("定位不到音频数据：文件可能已损坏，或使用了暂不支持的新版 NCM 封装")
+    audio = _decrypt_stream(data[pos:], k, phase)
 
     ext = _detect_ext(audio)
     fd, tmp = tempfile.mkstemp(suffix=ext, prefix="ncm_")

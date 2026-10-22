@@ -8,7 +8,7 @@
 
 *Drag. Drop. Converted.*
 
-[![Version](https://img.shields.io/badge/version-2.12-blue)](../../releases)
+[![Version](https://img.shields.io/badge/version-2.13-blue)](../../releases)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)]()
 [![Python](https://img.shields.io/badge/python-3.11+-yellow)]()
@@ -27,7 +27,7 @@
 
 ## 📸 效果
 
-界面（深色模式，v2.12）：
+界面（深色模式，v2.13）：
 
 ![GUI 界面](screenshots/gui-dark.png)
 
