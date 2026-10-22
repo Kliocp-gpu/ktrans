@@ -30,23 +30,12 @@ import tkinter.font as tkfont
 import urllib.parse
 from tkinter import filedialog, messagebox, ttk
 
-from mp3_to_mp4 import convert_one, default_output, find_ffmpeg, unique_output
+from mp3_to_mp4 import (AUDIO_EXTS, cancel_all, convert_one, default_output,
+                        expand_inputs, find_ffmpeg, unique_output)
 
 APP_NAME = "ktrans"
 APP_SUBTITLE = "音乐格式转换器"
 VERSION = "2.11"
-
-AUDIO_EXTS = (
-    ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus",
-    ".ape", ".mka", ".wma", ".aif", ".aiff", ".mp2", ".wv", ".tta",
-    ".ac3", ".ncm",
-    # QQ 音乐 / Moo 音乐私有格式
-    ".qmc0", ".qmc2", ".qmc3", ".qmc4", ".qmc6", ".qmc8",
-    ".qmcflac", ".qmcogg", ".tkm",
-    ".mflac", ".mflac0", ".mflac1", ".mflaca", ".mflach", ".mflacl", ".mflacm",
-    ".mgg", ".mgg0", ".mgg1", ".mgga", ".mggh", ".mggl", ".mggm",
-    ".bkcmp3", ".bkcm4a", ".bkcflac", ".bkcwav", ".bkcape", ".bkcogg", ".bkcwma",
-)
 
 # 苹果系统配色（浅色 / 深色两套）
 LIGHT = {
@@ -129,6 +118,10 @@ class FlatButton(tk.Canvas):
     def set_enabled(self, v: bool) -> None:
         self.enabled = v
         self.config(cursor="pointinghand" if v else "arrow")
+        self._redraw()
+
+    def set_text(self, v: str) -> None:
+        self.label = v
         self._redraw()
 
     def _redraw(self) -> None:
@@ -467,11 +460,14 @@ class App:
         self.audio_codec = tk.StringVar(value="auto")
         self.out_format = tk.StringVar(value="mp4")
         self.video_mode = tk.StringVar(value="纯黑")
+        self.loudnorm = tk.BooleanVar(value=False)
         self.count_text = tk.StringVar(value="尚未添加文件")
         self.status = tk.StringVar(value="准备就绪")
 
         self.log_q: queue.Queue = queue.Queue()
         self.running = False
+        self.cancel_event = threading.Event()
+        self.failures: list = []
         self.pages: dict[str, tk.Frame] = {}
         self.nav_items: dict[str, tk.Label] = {}
         self.page = "convert"
@@ -604,11 +600,25 @@ class App:
         # 底部：开始按钮（固定宽度居中，不再整行铺满）+ 进度 + 状态
         bottom = tk.Frame(p, bg=self.pal["bg"])
         bottom.pack(fill="x", padx=20, pady=(0, 16))
+        btn_row = tk.Frame(bottom, bg=self.pal["bg"])
+        btn_row.pack()
         self.start_btn = FlatButton(
-            bottom, text="开始转换", command=self._start, pal=self.pal,
-            font=self.f_btn, kind="primary", width=220, height=36, radius=9,
+            btn_row, text="开始转换", command=self._start, pal=self.pal,
+            font=self.f_btn, kind="primary", width=160, height=36, radius=9,
         )
-        self.start_btn.pack()
+        self.start_btn.pack(side="left")
+        self.cancel_btn = FlatButton(
+            btn_row, text="取消", command=self._cancel, pal=self.pal,
+            font=self.f_btn, width=88, height=36, radius=9,
+        )
+        self.cancel_btn.pack(side="left", padx=(10, 0))
+        self.cancel_btn.set_enabled(False)
+        self.fail_btn = FlatButton(
+            btn_row, text="查看失败", command=self._show_failures, pal=self.pal,
+            font=self.f_btn, width=100, height=36, radius=9,
+        )
+        self.fail_btn.pack(side="left", padx=(10, 0))
+        self.fail_btn.set_enabled(False)
         self.prog = ttk.Progressbar(bottom, mode="determinate", maximum=100)
         self.prog.pack(fill="x", pady=(10, 4))
         tk.Label(bottom, textvariable=self.status, bg=self.pal["bg"],
@@ -683,8 +693,8 @@ class App:
         # 高级行：仅视频（mp4）输出时可见
         self.adv_row = tk.Frame(form, bg=self.pal["card"])
         self._ctl_label(self.adv_row, "画面")
-        ttk.Combobox(self.adv_row, textvariable=self.video_mode, width=5,
-                     values=["纯黑", "封面"], state="readonly").pack(side="left")
+        ttk.Combobox(self.adv_row, textvariable=self.video_mode, width=6,
+                     values=["纯黑", "封面", "可视化"], state="readonly").pack(side="left")
         self._ctl_label(self.adv_row, "分辨率", pad=(12, 6))
         ttk.Entry(self.adv_row, textvariable=self.resolution,
                   width=9).pack(side="left")
@@ -696,6 +706,8 @@ class App:
                     width=3).pack(side="left")
         tk.Label(self.adv_row, text="近无损", bg=self.pal["card"],
                  fg=self.pal["gray"], font=self.f_sub).pack(side="left", padx=(12, 0))
+        ttk.Checkbutton(self.adv_row, text="响度归一化", variable=self.loudnorm,
+                        ).pack(side="left", padx=(14, 0))
 
         self.out_format.trace_add("write", lambda *_: self._toggle_adv())
         self._toggle_adv()
@@ -818,9 +830,7 @@ class App:
             if not p:
                 continue
             if os.path.isdir(p):
-                for name in sorted(os.listdir(p)):
-                    if name.lower().endswith(AUDIO_EXTS):
-                        paths.append(os.path.join(p, name))
+                paths.extend(expand_inputs([p]))
             elif os.path.isfile(p) and p.lower().endswith(AUDIO_EXTS):
                 paths.append(p)
 
@@ -873,14 +883,12 @@ class App:
         d = filedialog.askdirectory(title="选择包含音频的文件夹")
         if not d:
             return
-        found = [
-            os.path.join(d, n) for n in sorted(os.listdir(d))
-            if n.lower().endswith(AUDIO_EXTS)
-        ]
+        found = expand_inputs([d])
         if not found:
-            messagebox.showinfo("提示", "该文件夹下未找到音频文件。")
+            messagebox.showinfo("提示", "该文件夹（含子文件夹）下未找到音频文件。")
             return
         self._append_files(found)
+        self._log(f"[文件夹] {d} 递归找到 {len(found)} 个音频文件")
 
     def _append_files(self, paths: list[str]) -> None:
         for p in paths:
@@ -937,6 +945,31 @@ class App:
         self.log_text.insert("end", msg + "\n")
         self.log_text.see("end")
 
+    def _show_failures(self) -> None:
+        """失败清单：列出每个失败文件与 ffmpeg 的最后一行报错。"""
+        if not self.failures:
+            messagebox.showinfo("失败清单", "上一轮没有失败的文件。")
+            return
+        win = tk.Toplevel(self.root)
+        win.title("失败清单")
+        win.geometry("720x420")
+        win.configure(background=self.pal["bg"])
+        tk.Label(win, text=f"共 {len(self.failures)} 个文件未成功",
+                 bg=self.pal["bg"], fg=self.pal["text"],
+                 font=self.f_nav).pack(anchor="w", padx=20, pady=(16, 8))
+        wrap = tk.Frame(win, bg=self.pal["bg"])
+        wrap.pack(fill="both", expand=True, padx=20, pady=(0, 16))
+        box = tk.Text(wrap, bg=self.pal["card"], fg=self.pal["text"], relief="flat",
+                      borderwidth=0, highlightthickness=0, font=self.f_sub,
+                      wrap="word", insertbackground=self.pal["text"])
+        sb = ttk.Scrollbar(wrap, orient="vertical", command=box.yview)
+        box.configure(yscrollcommand=sb.set)
+        box.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        for path, reason in self.failures:
+            box.insert("end", f"{path}\n    {reason}\n\n")
+        box.configure(state="disabled")
+
     # ---------- 转换 ----------
     def _start(self) -> None:
         if self.running:
@@ -963,21 +996,37 @@ class App:
             return
 
         self.running = True
+        self.cancel_event = threading.Event()
+        self.failures = []
         self.start_btn.set_enabled(False)
+        self.cancel_btn.set_enabled(True)
+        self.fail_btn.set_enabled(False)
         self.prog["value"] = 0
         self.status.set(f"开始处理 {len(self.files)} 个文件")
         self._log(f"开始处理 {len(self.files)} 个文件，输出到 {out_dir}")
 
+        video_mode = {"纯黑": "black", "封面": "cover", "可视化": "visual"}.get(
+            self.video_mode.get(), "black")
         threading.Thread(
             target=self._worker,
             args=(ffmpeg, out_dir, w, h, self.fps.get(),
                   self.crf.get(), self.audio_codec.get(), self.out_format.get(),
-                  "cover" if self.video_mode.get() == "封面" else "black"),
+                  video_mode, self.loudnorm.get()),
             daemon=True,
         ).start()
 
+    def _cancel(self) -> None:
+        """取消：置位事件 + 终止进行中的 ffmpeg，剩下的排队任务随即放弃。"""
+        if not self.running:
+            return
+        self.cancel_event.set()
+        cancel_all()
+        self.status.set("正在取消…")
+        self._log("[取消] 已请求停止，等待进行中的任务退出")
+        self.cancel_btn.set_enabled(False)
+
     def _worker(self, ffmpeg, out_dir, w, h, fps, crf, codec, out_fmt="mp4",
-                video_mode="black") -> None:
+                video_mode="black", loudnorm=False) -> None:
         ok = total = 0
         n = len(self.files)
         with concurrent.futures.ThreadPoolExecutor(
@@ -986,6 +1035,8 @@ class App:
             futs = {}
             used: set[str] = set()
             for f in self.files:
+                if self.cancel_event.is_set():
+                    break
                 # 同名不同格式、或不同专辑里的同名曲目会撞成同一个输出，这里加序号区分
                 out = unique_output(
                     os.path.join(out_dir, os.path.basename(default_output(f, out_fmt))), used
@@ -993,6 +1044,7 @@ class App:
                 futs[ex.submit(
                     convert_one, ffmpeg, f, out, w, h, fps, crf, codec, True,
                     lambda m: self.log_q.put(m), out_fmt, video_mode,
+                    None, loudnorm, self.cancel_event, self.failures,
                 )] = out
             for fut in concurrent.futures.as_completed(futs):
                 if fut.result():
@@ -1010,10 +1062,25 @@ class App:
                     if item[0] == "__DONE__":
                         _, ok, total = item
                         self.prog["value"] = 100
-                        self.status.set(f"完成：成功 {ok} / 共 {total}")
-                        self._log(f"\n全部完成：成功 {ok}/{total}")
+                        cancelled = self.cancel_event.is_set()
+                        nf = len(self.failures)
+                        if cancelled:
+                            self.status.set(f"已取消：完成 {ok} / 共 {total}")
+                            self._log(f"\n已取消：完成 {ok}/{total}")
+                        else:
+                            self.status.set(
+                                f"完成：成功 {ok} / 共 {total}"
+                                + (f"，失败 {nf} 个" if nf else ""))
+                            self._log(f"\n全部完成：成功 {ok}/{total}"
+                                      + (f"，失败 {nf} 个" if nf else ""))
                         self.running = False
                         self.start_btn.set_enabled(True)
+                        self.cancel_btn.set_enabled(False)
+                        self.fail_btn.set_enabled(bool(nf))
+                        if nf:
+                            self.fail_btn.set_text(f"查看失败 ({nf})")
+                        else:
+                            self.fail_btn.set_text("查看失败")
                     elif item[0] == "__PROG__":
                         _, done, n = item
                         self.prog["value"] = done / n * 100 if n else 0

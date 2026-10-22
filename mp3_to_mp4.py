@@ -6,7 +6,12 @@ mp3_to_mp4.py — KTrans 转换核心：音频 → 视频 / 纯音频。
   black  纯黑屏 mp4（默认）。像素值 Y=0 的真黑，体积最小，专治"只收视频"的平台
   cover  封面模式。内嵌专辑图导出 → 模糊放大铺底 + 居中封面 + 歌名/歌手文字；
          没有封面的文件自动退成"黑底 + 居中歌名"
+  visual 可视化模式。模糊封面铺底 + 音频波形（showwaves）+ 歌名/歌手文字；
+         没有封面退成黑底波形
   其余   纯音频输出 mp3 / m4a / flac / wav，同源编码直接 copy 无损
+
+标签：解密格式（NCM）解出来是裸流，转换时把歌名/歌手/专辑与内嵌封面写回输出；
+常规文件的标签在 mp4 封装时会丢，同样显式写回。--loudnorm 做 EBU R128 响度归一化。
 
 加密格式先经 ncm_decoder（网易云 .ncm）/ qmc_decoder（QQ 音乐 .qmc/.mflac/.mgg）解密，
 再交给 ffmpeg。零第三方依赖，只调用系统 ffmpeg；核心函数同时被 CLI 与 GUI 复用。
@@ -16,6 +21,7 @@ mp3_to_mp4.py — KTrans 转换核心：音频 → 视频 / 纯音频。
     python mp3_to_mp4.py song.ncm --video cover -r 1920x1080
     python mp3_to_mp4.py song.flac --format flac
     python mp3_to_mp4.py a.mp3 b.mp3 c.mp3          # 批量，各自生成同名输出
+    python mp3_to_mp4.py 专辑目录/ --video visual --loudnorm   # 目录递归收录
 
 依赖: ffmpeg（需在 PATH 中，或用 --ffmpeg 指定路径）
 """
@@ -27,6 +33,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unicodedata
 
 # QQ 音乐 / Moo 音乐私有加密格式（同体系，统一走 qmc_decoder）
@@ -41,8 +49,22 @@ QMC_EXTS = (
 # 输出格式：mp4 = 视频（上传平台）；其余 = 纯音频输出（解锁/转码）
 OUTPUT_FORMATS = ("mp4", "mp3", "m4a", "flac", "wav")
 
-# mp4 的画面模式：black = 纯黑屏；cover = 专辑封面 + 模糊背景 + 歌名文字
-VIDEO_MODES = ("black", "cover")
+# 收录音频用的扩展名表：目录递归与 GUI 拖放过滤共用这一份
+AUDIO_EXTS = (
+    ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus",
+    ".ape", ".mka", ".wma", ".aif", ".aiff", ".mp2", ".wv", ".tta",
+    ".ac3", ".ncm",
+) + QMC_EXTS
+
+# mp4 的画面模式：black = 纯黑屏；cover = 专辑封面 + 模糊背景 + 歌名文字；
+# visual = 模糊封面铺底 + 音频波形 + 歌名文字
+VIDEO_MODES = ("black", "cover", "visual")
+
+# 响度归一化（EBU R128）：-16 LUFS 是流媒体平台常见的目标响度
+LOUDNORM_FILTER = "loudnorm=I=-16:TP=-1.5:LRA=11"
+
+# 可视化模式的波形颜色，与图标主色一致
+WAVE_COLOR = "0xF0A233"
 
 # drawtext 需要字体文件；优先挑带中文字形的（macOS / Windows / Linux 常见位置）
 FONT_CANDIDATES = (
@@ -289,6 +311,61 @@ def _write_text(work_dir: str, name: str, text: str) -> str:
     return p
 
 
+# ---------------------------------------------------------------- 可中断执行
+# 进行中的 ffmpeg 进程登记表：GUI 点「取消」时统一 terminate，
+# 否则批量转换只能等当前这一批全部跑完才停得下来。
+_PROCS: set = set()
+_PROCS_LOCK = threading.Lock()
+
+
+def cancel_all() -> None:
+    """终止所有正在跑的 ffmpeg（供取消按钮调用）。"""
+    with _PROCS_LOCK:
+        procs = list(_PROCS)
+    for p in procs:
+        try:
+            p.terminate()
+        except Exception:
+            pass
+
+
+def _run_ffmpeg(cmd: list[str], cancel: "threading.Event | None" = None
+                ) -> tuple[int, str]:
+    """跑一条 ffmpeg 命令，可中途终止。返回 (返回码, stderr)。"""
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.PIPE)
+    with _PROCS_LOCK:
+        _PROCS.add(proc)
+    try:
+        while proc.poll() is None:
+            if cancel is not None and cancel.is_set():
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+                break
+            time.sleep(0.2)
+        try:
+            _, err_b = proc.communicate(timeout=20)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            _, err_b = proc.communicate()
+        err = (err_b or b"").decode("utf-8", "ignore")
+    finally:
+        with _PROCS_LOCK:
+            _PROCS.discard(proc)
+    return proc.returncode or 0, err
+
+
+def metadata_args(title: str = "", artist: str = "", album: str = "") -> list[str]:
+    """拼 -metadata 参数；空值跳过，避免写出一堆空标签。"""
+    out: list[str] = []
+    for key, val in (("title", title), ("artist", artist), ("album", album)):
+        if val:
+            out += ["-metadata", f"{key}={val}"]
+    return out
+
+
 def build_drawtext(title: str, artist: str, width: int, height: int,
                    work_dir: str | None, font: str | None,
                    center: bool = False) -> str:
@@ -343,6 +420,8 @@ def build_cover_command(
     artist: str = "",
     work_dir: str | None = None,
     font: str | None = None,
+    loudnorm: bool = False,
+    meta: dict | None = None,
 ) -> list[str]:
     """封面模式命令：模糊放大的封面铺底 + 居中封面 + 底部歌名/歌手。
 
@@ -391,11 +470,94 @@ def build_cover_command(
     cmd += ["-c:a", audio_codec]
     if audio_codec == "aac":
         cmd += ["-b:a", "192k"]
+    if loudnorm:
+        cmd += ["-af", LOUDNORM_FILTER]
+    if meta:
+        cmd += metadata_args(meta.get("title", ""), meta.get("artist", ""),
+                             meta.get("album", ""))
     if duration:
         # 黑屏分支靠 color 的 d= 收尾，但 1fps 下 d=5.042 会补到第 6 帧（6s），
         # 徒手多出 1 秒；统一用 -t 卡死输出时长。
         # 这里刻意不加 -shortest：实测它会让音轨提前 50ms 收尾（比 -t 的 26ms 还多），
         # 而且它会和 1fps 的帧边界打架。真正的残损文件另有长度校验兜底。
+        cmd += ["-t", f"{duration:.3f}"]
+    cmd += ["-movflags", "+faststart", output_path]
+    return cmd
+
+
+def build_visual_command(
+    ffmpeg: str,
+    audio_path: str,
+    output_path: str,
+    width: int,
+    height: int,
+    fps: int,
+    crf: int,
+    audio_codec: str,
+    overwrite: bool,
+    duration: float | None,
+    cover_path: str | None = None,
+    title: str = "",
+    artist: str = "",
+    work_dir: str | None = None,
+    font: str | None = None,
+    loudnorm: bool = False,
+    meta: dict | None = None,
+) -> list[str]:
+    """可视化模式命令：模糊封面铺底 + 居中音频波形 + 底部歌名/歌手。
+
+    波形由 showwaves 从音频实时生成（cline 模式，上下对称的波形带），
+    叠在封面模式那套模糊背景上；没有封面时退化成黑底 + 波形。
+    """
+    art = build_drawtext(title, artist, width, height, work_dir, font)
+    cmd = [ffmpeg, "-y" if overwrite else "-n"]
+
+    # 波形带占画面中部，避开底部文字区（文字从 0.754H 起）
+    wave_w = max(2, int(round(width * 0.86)) // 2 * 2)
+    wave_h = max(2, int(round(height * 0.30)) // 2 * 2)
+
+    if cover_path:
+        cmd += ["-loop", "1", "-framerate", str(fps), "-i", cover_path]
+        cmd += ["-i", audio_path]
+        amap = "1:a"
+        blur = max(2, int(round(height * 0.055)))
+        graph = (
+            f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},gblur=sigma={blur},"
+            "eq=brightness=-0.30:saturation=1.1[bg];"
+            f"[1:a]showwaves=s={wave_w}x{wave_h}:mode=cline:draw=full:rate={fps}"
+            f":colors={WAVE_COLOR}[wv];"
+            f"[bg][wv]overlay=(W-w)/2:(H-h)/2"
+        )
+    else:
+        color = f"color=c=black:s={width}x{height}:r={fps}"
+        if duration:
+            color += f":d={duration:.3f}"
+        cmd += ["-i", audio_path, "-f", "lavfi", "-i", color]
+        amap = "0:a"
+        graph = (
+            f"[0:a]showwaves=s={wave_w}x{wave_h}:mode=cline:draw=full:rate={fps}"
+            f":colors={WAVE_COLOR}[wv];"
+            f"[1:v][wv]overlay=(W-w)/2:(H-h)/2"
+        )
+    if art:
+        graph += "," + art
+    graph += "[v]"
+
+    cmd += ["-filter_complex", graph, "-map", "[v]", "-map", amap,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", str(crf),
+            "-pix_fmt", "yuv420p"]
+    if not cover_path:
+        cmd += ["-color_range", "2"]
+    cmd += ["-c:a", audio_codec]
+    if audio_codec == "aac":
+        cmd += ["-b:a", "192k"]
+    if loudnorm:
+        cmd += ["-af", LOUDNORM_FILTER]
+    if meta:
+        cmd += metadata_args(meta.get("title", ""), meta.get("artist", ""),
+                             meta.get("album", ""))
+    if duration:
         cmd += ["-t", f"{duration:.3f}"]
     cmd += ["-movflags", "+faststart", output_path]
     return cmd
@@ -412,6 +574,8 @@ def build_command(
     audio_codec: str,
     overwrite: bool,
     video_duration: float | None = None,
+    loudnorm: bool = False,
+    meta: dict | None = None,
 ) -> list[str]:
     # 必须给黑屏源显式时长(d=)：1fps 黑帧编码极快(约 55 倍速)，视频编码器会在
     # “音频读到 EOF”这个信号传回来之前冲过头，导致视频轨比音频长十几到几十秒
@@ -437,6 +601,11 @@ def build_command(
     ]
     if audio_codec == "aac":
         cmd += ["-b:a", "192k"]
+    if loudnorm:
+        cmd += ["-af", LOUDNORM_FILTER]
+    if meta:
+        cmd += metadata_args(meta.get("title", ""), meta.get("artist", ""),
+                             meta.get("album", ""))
     cmd += ["-shortest", "-movflags", "+faststart", output_path]
     return cmd
 
@@ -448,44 +617,84 @@ def build_audio_command(
     fmt: str,
     overwrite: bool,
     log=print,
+    cover_path: str | None = None,
+    loudnorm: bool = False,
+    meta: dict | None = None,
 ) -> list[str]:
     """纯音频输出命令：同源编码则 copy 无损，否则转码；尽量保留内嵌封面。
 
     wav 容器不支持封面图，直接丢弃视频流；mp3/m4a/flac 用 `-map 0:v?`
     可选映射带过去（disposition 随流自动保留，无需显式设置）。
+    解密格式（NCM）解出来的裸流没有标签，cover_path / meta 就是用来把
+    封面与歌名歌手补回去的。
     """
     codec = _probe_codec(ffmpeg, audio_path)
     cmd = [ffmpeg, "-y" if overwrite else "-n", "-i", audio_path]
+    if cover_path:
+        cmd += ["-i", cover_path]
     if fmt == "wav":
         cmd += ["-map", "0:a", "-vn", "-c:a", "pcm_s16le"]
         if codec != "pcm_s16le":
             log(f"[音频] 源编码 {codec or '未知'}，转 PCM/WAV")
+        if loudnorm:
+            cmd += ["-af", LOUDNORM_FILTER]
+        if meta:
+            cmd += metadata_args(meta.get("title", ""), meta.get("artist", ""),
+                                 meta.get("album", ""))
         return cmd + [output_path]
 
-    cmd += ["-map", "0:a", "-map", "0:v?", "-c:v", "copy"]
+    if cover_path:
+        # 附回封面：mp3 走 ID3v2.3（部分播放器认不出 2.4 的 APIC）
+        cmd += ["-map", "0:a", "-map", "1:v", "-c:v", "mjpeg",
+                "-disposition:v", "attached_pic",
+                "-metadata:s:v", "title=Album cover"]
+        if fmt == "mp3":
+            cmd += ["-id3v2_version", "3"]
+        log("[音频] 已写入内嵌封面")
+    else:
+        cmd += ["-map", "0:a", "-map", "0:v?", "-c:v", "copy"]
+
+    # 归一化必须重编码，copy 分支在此让位
+    def _encode_args() -> list[str]:
+        if fmt == "mp3":
+            return ["-c:a", "libmp3lame", "-q:a", "2"]
+        if fmt == "m4a":
+            return ["-c:a", "aac", "-b:a", "192k"]
+        return ["-c:a", "flac"]
+
     if fmt == "mp3":
-        if codec == "mp3":
+        if codec == "mp3" and not loudnorm:
             cmd += ["-c:a", "copy"]
             log("[音频] 源编码 mp3，原样输出")
         else:
-            cmd += ["-c:a", "libmp3lame", "-q:a", "2"]
-            log(f"[音频] 源编码 {codec or '未知'}，转 MP3 V2")
+            cmd += _encode_args()
+            log(f"[音频] 源编码 {codec or '未知'}，转 MP3 V2"
+                + ("（响度归一化）" if loudnorm else ""))
     elif fmt == "m4a":
-        if codec == "aac":
+        if codec == "aac" and not loudnorm:
             cmd += ["-c:a", "copy"]
             log("[音频] 源编码 aac，原样输出")
         else:
-            cmd += ["-c:a", "aac", "-b:a", "192k"]
-            log(f"[音频] 源编码 {codec or '未知'}，转 AAC 192k")
+            cmd += _encode_args()
+            log(f"[音频] 源编码 {codec or '未知'}，转 AAC 192k"
+                + ("（响度归一化）" if loudnorm else ""))
     elif fmt == "flac":
-        if codec == "flac":
+        if codec == "flac" and not loudnorm:
             cmd += ["-c:a", "copy"]
             log("[音频] 源编码 flac，原样输出")
         else:
-            cmd += ["-c:a", "flac"]
-            log(f"[音频] 源编码 {codec or '未知'}，转 FLAC（无损）")
+            cmd += _encode_args()
+            log(f"[音频] 源编码 {codec or '未知'}，转 FLAC（无损）"
+                + ("（响度归一化）" if loudnorm else ""))
     else:
         raise ValueError(f"不支持的音频输出格式: {fmt}")
+    if loudnorm:
+        cmd += ["-af", LOUDNORM_FILTER]
+    if meta and (meta.get("title") or meta.get("artist")):
+        cmd += metadata_args(meta.get("title", ""), meta.get("artist", ""),
+                             meta.get("album", ""))
+        log(f"[音频] 已写入标签：{meta.get('title') or '-'}"
+            + (f" — {meta.get('artist')}" if meta.get("artist") else ""))
     return cmd + [output_path]
 
 
@@ -503,12 +712,18 @@ def convert_one(
     output_format: str = "mp4",
     video_mode: str = "black",
     font: str | None = None,
+    loudnorm: bool = False,
+    cancel: "threading.Event | None" = None,
+    failures: list | None = None,
 ) -> bool:
     """转换单个文件。log 为可调用对象（CLI 用 print，GUI 用队列回调）。返回是否成功。
 
     video_mode 只在 output_format == "mp4" 时生效：
-      black = 纯黑屏（最省体积，平台压制最友好）
-      cover = 专辑封面 + 模糊背景 + 歌名/歌手文字
+      black  = 纯黑屏（最省体积，平台压制最友好）
+      cover  = 专辑封面 + 模糊背景 + 歌名/歌手文字
+      visual = 模糊封面铺底 + 音频波形 + 歌名/歌手文字
+    cancel 置位时立刻终止 ffmpeg 并放弃该文件（不计入 failures）。
+    失败信息以 (路径, 原因) 追加进 failures，供调用方汇总展示。
     """
     if not os.path.isfile(audio_path):
         log(f"[跳过] 输入文件不存在: {audio_path}")
@@ -548,11 +763,28 @@ def convert_one(
             log(f"[失败] QMC 解密出错 {audio_path}: {e}")
             return False
 
+    # NCM 的标签在文件头里，解密后是裸流，标签得靠 -metadata 补回去；
+    # QMC / 常规文件解出来就是原文件，标签随流自带，ffmpeg 默认会复制。
+    tags: dict = {"title": "", "artist": "", "album": ""}
+    if ncm_meta:
+        try:
+            from ncm_decoder import meta_summary
+            t, a, al = meta_summary(ncm_meta)
+            tags = {"title": t or "", "artist": a or "", "album": al or ""}
+        except Exception:
+            pass
+
     work: str | None = None
+    cover_file: str | None = None  # 纯音频输出时附回的封面（解密格式的裸流没有）
     try:
         if output_format == "mp4":
             info = probe_media(ffmpeg, src)
             dur = info["duration"]
+            if not tags["title"]:
+                # 非加密文件的标签本来随流自带，但 mp4 封装实测会丢，这里显式写回
+                tags = {"title": info.get("title", ""),
+                        "artist": info.get("artist", ""),
+                        "album": info.get("album", "")}
             effective = audio_codec
             if audio_codec == "auto":
                 # 抖音等平台的“提取音频”认不准 FLAC-in-MP4 这类非标准组合：
@@ -566,14 +798,22 @@ def convert_one(
                     log(f"[音频] 源编码 {codec or '未知'}，自动转 AAC（保证平台可提取音频）")
 
             mode = video_mode
-            if mode == "cover" and not dur:
-                # 封面模式靠 -t 卡时长；探不到时长就退回黑屏，避免无限循环出片
-                log("[封面] 取不到音频时长，改用纯黑屏")
+            if mode in ("cover", "visual") and not dur:
+                # 封面 / 可视化都靠 -t 卡时长；探不到时长就退回黑屏，避免无限循环出片
+                log(f"[{mode}] 取不到音频时长，改用纯黑屏")
                 mode = "black"
+            if mode == "visual" and fps < 10:
+                # 波形要连起来才像波形，1fps 只会画出一帧
+                fps = 25
+                log("[可视化] 帧率提升到 25（波形需要连续帧）")
+            if loudnorm and effective == "copy":
+                effective = "aac"
+                log("[音频] 开启响度归一化，改为转 AAC 192k（copy 走不了滤镜）")
 
-            if mode == "cover":
+            title = artist = ""
+            cover = None
+            if mode in ("cover", "visual"):
                 work = tempfile.mkdtemp(prefix="ktrans_cov_")
-                cover = None
                 if ncm_cover:
                     # NCM 的封面是独立字节块，直接落盘
                     cext = ".jpg" if ncm_cover[:3] == b"\xff\xd8\xff" else ".png"
@@ -582,38 +822,72 @@ def convert_one(
                         f.write(ncm_cover)
                 else:
                     cover = extract_cover(ffmpeg, src, info, work)
-                if ncm_meta:
-                    from ncm_decoder import meta_summary
-                    n_title, n_artist, _ = meta_summary(ncm_meta)
-                else:
-                    n_title, n_artist = "", ""
-                title = n_title or info["title"] or \
+                title = tags["title"] or info["title"] or \
                     os.path.splitext(os.path.basename(audio_path))[0]
-                artist = n_artist or info["artist"]
+                artist = tags["artist"] or info["artist"]
                 font = find_font(font)
                 if cover is None:
-                    log("[封面] 源文件没有内嵌封面，改用黑底 + 文字")
+                    log("[画面] 源文件没有内嵌封面，改用黑底")
                 elif not font:
-                    log("[封面] 没找到中文字体，跳过文字只放封面")
-                log(f"[封面] {title}" + (f" — {artist}" if artist else ""))
+                    log("[画面] 没找到中文字体，跳过文字")
+                log(f"[{mode}] {title}" + (f" — {artist}" if artist else ""))
+
+            if mode == "cover":
                 cmd = build_cover_command(
                     ffmpeg, src, output_path, width, height, fps, crf,
                     effective, overwrite, duration=dur, cover_path=cover,
                     title=title, artist=artist, work_dir=work, font=font,
+                    loudnorm=loudnorm, meta=tags,
+                )
+            elif mode == "visual":
+                cmd = build_visual_command(
+                    ffmpeg, src, output_path, width, height, fps, crf,
+                    effective, overwrite, duration=dur, cover_path=cover,
+                    title=title, artist=artist, work_dir=work, font=font,
+                    loudnorm=loudnorm, meta=tags,
                 )
             else:
                 cmd = build_command(
                     ffmpeg, src, output_path, width, height, fps, crf,
                     effective, overwrite, video_duration=dur,
+                    loudnorm=loudnorm, meta=tags,
                 )
         else:
-            cmd = build_audio_command(ffmpeg, src, output_path, output_format, overwrite, log)
+            cover_file = None
+            if ncm_cover:
+                # 解密出来的裸流没有封面，写成临时文件再附回输出
+                work = tempfile.mkdtemp(prefix="ktrans_cov_")
+                cext = ".jpg" if ncm_cover[:3] == b"\xff\xd8\xff" else ".png"
+                cover_file = os.path.join(work, "cover" + cext)
+                with open(cover_file, "wb") as f:
+                    f.write(ncm_cover)
+            cmd = build_audio_command(ffmpeg, src, output_path, output_format,
+                                      overwrite, log, cover_path=cover_file,
+                                      loudnorm=loudnorm, meta=tags)
         log(f"[转换] {src}  ->  {output_path}")
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    except subprocess.CalledProcessError as exc:
-        err = exc.stderr.decode("utf-8", "ignore") if exc.stderr else ""
-        log(f"[失败] {audio_path}\n{err[-2000:]}")
-        return False
+
+        rc, err = _run_ffmpeg(cmd, cancel=cancel)
+        if rc != 0 and cover_file:
+            # 带封面写入失败时退回不带封面的命令重试一次
+            log("[音频] 带封面写入失败，改为不加封面重试")
+            cmd = build_audio_command(ffmpeg, src, output_path, output_format,
+                                      overwrite, log, cover_path=None,
+                                      loudnorm=loudnorm, meta=tags)
+            rc, err = _run_ffmpeg(cmd, cancel=cancel)
+        if rc != 0:
+            if cancel is not None and cancel.is_set():
+                # 取消不算失败：删掉半截产物，也不进失败清单
+                log(f"[已取消] {audio_path}")
+                try:
+                    os.remove(output_path)
+                except OSError:
+                    pass
+                return False
+            reason = (err.strip().splitlines() or ["未知错误"])[-1][:300]
+            log(f"[失败] {audio_path}\n{err[-2000:]}")
+            if failures is not None:
+                failures.append((audio_path, reason))
+            return False
     finally:
         for p in (tmp, work):
             if p and os.path.exists(p):
@@ -635,6 +909,25 @@ def convert_one(
         if vdur and adur and vdur - adur > 5:
             log(f"[提示] 视频比音频长 {vdur - adur:.1f}s，源文件可能被截断或时长信息不实")
     return True
+
+
+def expand_inputs(paths, recursive: bool = True) -> list[str]:
+    """把输入里的目录展开成音频文件列表（默认递归进子目录）。"""
+    out: list[str] = []
+    for p in paths:
+        if os.path.isdir(p):
+            if recursive:
+                for root, _dirs, files in os.walk(p):
+                    for name in sorted(files):
+                        if name.lower().endswith(AUDIO_EXTS):
+                            out.append(os.path.join(root, name))
+            else:
+                for name in sorted(os.listdir(p)):
+                    if name.lower().endswith(AUDIO_EXTS):
+                        out.append(os.path.join(p, name))
+        elif os.path.isfile(p):
+            out.append(p)
+    return out
 
 
 def main() -> None:
@@ -659,11 +952,22 @@ def main() -> None:
                              "mp3/m4a/flac/wav=纯音频输出（解锁/转码）")
     parser.add_argument("--video", default="black", choices=list(VIDEO_MODES),
                         help="mp4 的画面：black=纯黑屏（默认，体积最小）；"
-                             "cover=专辑封面+模糊背景+歌名/歌手文字")
-    parser.add_argument("--font", help="drawtext 用的字体文件（封面模式，默认自动探测中文字体）")
+                             "cover=专辑封面+模糊背景+歌名/歌手文字；"
+                             "visual=模糊封面+音频波形+歌名文字")
+    parser.add_argument("--loudnorm", action="store_true",
+                        help="响度归一化（EBU R128，目标 -16 LUFS）；需要重编码音频")
+    parser.add_argument("--no-recursive", action="store_true",
+                        help="输入为目录时只取当前层，不进子目录")
+    parser.add_argument("--font", help="drawtext 用的字体文件（封面/可视化模式，默认自动探测中文字体）")
     parser.add_argument("-y", "--overwrite", action="store_true",
                         help="覆盖已存在的输出文件（默认遇到同名会跳过报错）")
     args = parser.parse_args()
+
+    inputs = expand_inputs(args.inputs, recursive=not args.no_recursive)
+    if not inputs:
+        sys.exit("[错误] 没有找到可处理的音频文件（目录里没有受支持的格式？）")
+    if len(inputs) != len(args.inputs):
+        print(f"[提示] 展开目录后共 {len(inputs)} 个音频文件")
 
     try:
         width, height = (int(x) for x in args.resolution.lower().split("x"))
@@ -678,20 +982,32 @@ def main() -> None:
     if len(args.inputs) > 1 and args.output:
         print("[提示] 传入多个输入时 -o/--output 被忽略，按同名生成。")
 
+    failures: list = []
     ok = fail = 0
     used: set[str] = set()
-    for audio in args.inputs:
-        out = args.output if (len(args.inputs) == 1 and args.output) \
-            else default_output(audio, args.format)
-        out = unique_output(out, used)
-        if convert_one(ffmpeg, audio, out, width, height, args.fps, args.crf,
-                       args.audio_codec, args.overwrite, output_format=args.format,
-                       video_mode=args.video, font=args.font):
-            ok += 1
-        else:
-            fail += 1
+    single = len(inputs) == 1
+    try:
+        for audio in inputs:
+            out = args.output if (single and args.output) \
+                else default_output(audio, args.format)
+            out = unique_output(out, used)
+            if convert_one(ffmpeg, audio, out, width, height, args.fps, args.crf,
+                            args.audio_codec, args.overwrite, output_format=args.format,
+                            video_mode=args.video, font=args.font,
+                            loudnorm=args.loudnorm, failures=failures):
+                ok += 1
+            else:
+                fail += 1
+    except KeyboardInterrupt:
+        cancel_all()
+        print("\n已取消（终止进行中的 ffmpeg）。")
+        sys.exit(130)
 
     print(f"\n汇总: 成功 {ok} 个，失败/跳过 {fail} 个。")
+    if failures:
+        print("失败明细:")
+        for path, reason in failures:
+            print(f"  - {path}\n      {reason}")
     sys.exit(1 if fail else 0)
 
 

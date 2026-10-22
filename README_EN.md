@@ -18,9 +18,9 @@
 ---
 
 Turn music into the video file platforms demand — built for places that only accept video uploads
-(TikTok / Douyin / Bilibili…). Pick either picture: **truly pure black** (smallest file, friendliest to
-re-encoding), or **album art + blurred backdrop + title** (looks like an actual release). Not in the mood
-for video? Export mp3 / m4a / flac / wav instead.
+(TikTok / Douyin / Bilibili…). Pick one of three pictures: **truly pure black** (smallest file, friendliest
+to re-encoding), **album art + blurred backdrop + title** (looks like an actual release), or an animated
+**audio waveform** over the blurred art. Not in the mood for video? Export mp3 / m4a / flac / wav instead.
 
 NetEase `.ncm` and QQ Music `.qmc / .mflac / .mgg` are decrypted in-app — drop an encrypted file in and
 get something usable out.
@@ -43,6 +43,9 @@ Output produced by cover mode (an `.ncm` with embedded art + tags, straight to v
 |:---:|:---|
 | 🖤 **Truly black** | Not "looks black" — pixel value **Y=0 pure black**. Uses the `color_range` full-range flag to fix ffmpeg's default black source being Y=16 (visually black, but not actually black). |
 | 🖼️ **Cover mode** | Pulls the embedded album art: blurred & scaled backdrop + centered cover + title/artist text, with automatic font shrinking and ellipsis for long titles. Files without cover art fall back to "black + centered title". |
+| 📈 **Visualizer mode** | A live audio waveform (`showwaves`) laid over the blurred cover art, title/artist text as usual — the output is no longer a static picture. |
+| 🎚️ **Loudness normalization** | One-click EBU R128 (target -16 LUFS): source libraries vary wildly in loudness, so normalized uploads stop pumping between tracks. |
+| 🏷️ **Tag write-back** | Decrypted streams carry no tags; the converter writes title / artist / album and the embedded cover back into the output, so exported FLAC / MP3 no longer shows up as "Unknown Artist" in players. |
 | 🎁 **NCM support** | Built-in NetEase `.ncm` decryptor (pure Python, zero third-party dependencies) — metadata and embedded cover art come out too. |
 | 🎵 **All QQ Music formats** | `.qmc0/2/3/4/6/8`, `.qmcflac`, `.qmcogg`, `.mflac*`, `.mgg*`, `.tkm`, `.bkc*` — static table, map table and RC4 variant ciphers all reversed. |
 | 🎧 **Smart audio muxing** | Auto-detects the source codec: MP3 / AAC are remuxed losslessly, everything else (FLAC etc.) is transcoded to AAC — fixing Douyin's "extract audio failed" error. |
@@ -72,6 +75,7 @@ python3 mp3_to_mp4_gui.py
 # Command line
 python3 mp3_to_mp4.py music.mp3
 python3 mp3_to_mp4.py *.ncm *.flac --audio-codec auto
+python3 mp3_to_mp4.py AlbumFolder/ --video visual --loudnorm   # recursive folder + waveform + loudnorm
 ```
 
 ### 4. Build a macOS app bundle
